@@ -18,7 +18,7 @@ function builtin(
   };
 }
 
-const MUSIC_PHRASES = [
+export const MUSIC_PHRASES = [
   "включи музыку",
   "вруби музыку",
   "запусти музыку",

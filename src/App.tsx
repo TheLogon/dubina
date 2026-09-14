@@ -6,15 +6,20 @@ import { Orb } from "./components/Orb";
 import { ScenarioList } from "./components/ScenarioList";
 import { ScenarioEditor } from "./components/ScenarioEditor";
 import { SettingsView } from "./components/SettingsView";
+import { DocsView } from "./components/DocsView";
 import {
   deleteScenario,
   findScenarioByPhrase,
   loadScenarios,
+  normalizePhrase,
   upsertScenario,
 } from "./store/scenarios";
 import { findBuiltinByPhrase } from "./commands/builtins";
 import { findChatterReply } from "./commands/chatter";
-import { normalizePhrase } from "./store/scenarios";
+import {
+  isDictationStop,
+  matchDictationStart,
+} from "./commands/dictation";
 import {
   createEmptyScenario,
   type AppView,
@@ -48,7 +53,7 @@ function App() {
   const closeToTrayRef = useRef(settings.closeToTray);
   const scenariosRef = useRef(scenarios);
   const listenerRef = useRef(listener);
-  const modeRef = useRef<"idle" | "command">("idle");
+  const modeRef = useRef<"idle" | "command" | "dictation">("idle");
   const voiceRef = useRef<VoiceController | null>(null);
   const busyRef = useRef(false);
   const wakeLatchRef = useRef(false);
@@ -114,6 +119,72 @@ function App() {
     window.setTimeout(() => setListener("idle"), 1200);
   }
 
+  async function hideWindow() {
+    try {
+      await getCurrentWindow().hide();
+    } catch {
+      
+    }
+  }
+
+  async function startDictation(remainder: string) {
+    modeRef.current = "dictation";
+    wakeLatchRef.current = false;
+    busyRef.current = false;
+    setView("home");
+    setListener("dictation");
+    setStatus("Диктовка — скажи «стоп»");
+    setCaption("");
+    setCaptionFinal("");
+    speakSafe("Диктуй");
+    await hideWindow();
+    const rest = remainder.trim();
+    if (rest) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        await invoke("type_text", { text: `${rest} ` });
+        setCaptionFinal(rest);
+      } catch (e) {
+        setStatus(e instanceof Error ? e.message : "Ошибка вставки");
+      }
+    }
+  }
+
+  function stopDictation() {
+    modeRef.current = "idle";
+    setListener("idle");
+    setStatus("Готово");
+    setCaption("");
+    setCaptionFinal("");
+    speakSafe("Готово");
+  }
+
+  async function typeDictated(raw: string) {
+    const { woke, command } = extractWakeAndCommand(raw);
+    const phrase = (woke ? command : raw).trim();
+    if (!phrase) return;
+    if (isDictationStop(phrase)) {
+      stopDictation();
+      return;
+    }
+    setCaptionFinal(phrase);
+    setCaption("");
+    setStatus("Пишу…");
+    try {
+      await invoke("type_text", { text: `${phrase} ` });
+      setStatus("Диктовка — скажи «стоп»");
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Ошибка вставки");
+    }
+  }
+
+  function tryDictationCommand(phrase: string): boolean {
+    const hit = matchDictationStart(phrase);
+    if (!hit) return false;
+    void startDictation(hit.remainder);
+    return true;
+  }
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void (async () => {
@@ -171,6 +242,11 @@ function App() {
       if (busyRef.current) return;
       console.info("[dubina:stt]", text);
 
+      if (modeRef.current === "dictation") {
+        await typeDictated(text);
+        return;
+      }
+
       if (modeRef.current === "command") {
         setCaptionFinal(text);
         setCaption("");
@@ -178,9 +254,9 @@ function App() {
         const phrase = (woke ? command : text).trim();
         wakeLatchRef.current = false;
         if (!phrase) {
-          
           return;
         }
+        if (tryDictationCommand(phrase)) return;
         const match =
           findBuiltinByPhrase(phrase, settingsRef.current) ??
           findScenarioByPhrase(scenariosRef.current, phrase);
@@ -204,6 +280,7 @@ function App() {
       setCaptionFinal(command || "Дубина");
 
       if (command) {
+        if (tryDictationCommand(command)) return;
         const match =
           findBuiltinByPhrase(command, settingsRef.current) ??
           findScenarioByPhrase(scenariosRef.current, command);
@@ -248,6 +325,11 @@ function App() {
     (text: string) => {
       if (busyRef.current) return;
 
+      if (modeRef.current === "dictation") {
+        setCaption(text);
+        return;
+      }
+
       if (modeRef.current === "command") {
         setCaption(text);
         return;
@@ -259,25 +341,31 @@ function App() {
       if (!woke) return;
 
       wakeLatchRef.current = true;
-      void revealWindow();
       setView("home");
       setCaption("");
       setCaptionFinal(command || "Дубина");
 
       if (command) {
+        if (matchDictationStart(command)) {
+          void startDictation(matchDictationStart(command)!.remainder);
+          return;
+        }
         const match =
           findBuiltinByPhrase(command, settingsRef.current) ??
           findScenarioByPhrase(scenariosRef.current, command);
         if (match) {
+          void revealWindow();
           setListener("wake");
           playActionSafe("wake");
           setStatus("А?");
           void executeScenario(match);
           return;
         }
+        void revealWindow();
         if (replyChatter(command)) return;
       }
 
+      void revealWindow();
       setListener("wake");
       playActionSafe("wake");
       setStatus("А?");
@@ -403,6 +491,13 @@ function App() {
           </button>
           <button
             type="button"
+            className={view === "docs" ? "nav__btn is-active" : "nav__btn"}
+            onClick={() => setView("docs")}
+          >
+            Документация
+          </button>
+          <button
+            type="button"
             className={view === "settings" ? "nav__btn is-active" : "nav__btn"}
             onClick={() => setView("settings")}
           >
@@ -494,6 +589,17 @@ function App() {
                   setView("scenarios");
                 }}
               />
+            </motion.div>
+          )}
+
+          {view === "docs" && (
+            <motion.div
+              key="docs"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+            >
+              <DocsView onBack={() => setView("home")} />
             </motion.div>
           )}
 

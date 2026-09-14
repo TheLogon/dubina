@@ -291,6 +291,13 @@ export function findChatterReply(spoken: string): string | null {
   return bestReplies[Math.floor(Math.random() * bestReplies.length)] ?? null;
 }
 
+export function listChatterTopics(): { triggers: string[]; replies: string[] }[] {
+  return RULES.map((r) => ({
+    triggers: [...r.triggers],
+    replies: [...r.replies],
+  }));
+}
+
 export function allChatterReplies(): string[] {
   const set = new Set<string>();
   for (const rule of RULES) {

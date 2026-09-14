@@ -12,6 +12,7 @@ const STATE_HINT: Record<ListenerState, string> = {
   listening: "Слушаю…",
   running: "Выполняю…",
   error: "Не понял",
+  dictation: "Диктовка…",
 };
 
 export function Orb({ state }: Props) {
@@ -32,7 +33,7 @@ export function Orb({ state }: Props) {
         animate={{
           scale: active ? [1, 1.06, 1] : [1, 1.03, 1],
           boxShadow:
-            state === "listening"
+            state === "listening" || state === "dictation"
               ? [
                   "0 0 40px rgba(232, 168, 56, 0.35)",
                   "0 0 70px rgba(232, 168, 56, 0.55)",
@@ -51,7 +52,7 @@ export function Orb({ state }: Props) {
                   ],
         }}
         transition={{
-          duration: state === "listening" ? 1.2 : 2.4,
+          duration: state === "listening" || state === "dictation" ? 1.2 : 2.4,
           repeat: Infinity,
           ease: "easeInOut",
         }}

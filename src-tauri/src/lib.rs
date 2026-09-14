@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use serde::Serialize;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -344,6 +345,152 @@ fn media_key(action: String) -> Result<(), String> {
     media_key_inner(action.trim())
 }
 
+#[tauri::command]
+fn type_text(text: String) -> Result<(), String> {
+    let text = text.trim_end();
+    if text.is_empty() {
+        return Ok(());
+    }
+    type_text_inner(text)
+}
+
+fn type_text_inner(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut child = Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(text.as_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        let status = child.wait().map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("pbcopy failed".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let status = Command::new("osascript")
+            .args([
+                "-e",
+                "tell application \"System Events\" to keystroke \"v\" using command down",
+            ])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err(
+                "Не удалось вставить текст. Дай Dubina доступ в «Универсальный доступ»."
+                    .into(),
+            );
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let b64 = base64_encode(text.as_bytes());
+        let ps = format!(
+            r#"
+$bytes = [Convert]::FromBase64String('{b64}')
+$text = [Text.Encoding]::UTF8.GetString($bytes)
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Clipboard]::SetText($text)
+Start-Sleep -Milliseconds 80
+[System.Windows.Forms.SendKeys]::SendWait('^v')
+"#
+        );
+        let status = Command::new("powershell")
+            .args(["-NoProfile", "-Command", &ps])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("Не удалось вставить текст".into());
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let ok_clip = if Command::new("wl-copy")
+            .arg(text)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            true
+        } else {
+            let mut child = Command::new("xclip")
+                .args(["-selection", "clipboard"])
+                .stdin(Stdio::piped())
+                .spawn()
+                .ok();
+            if let Some(ref mut c) = child {
+                if let Some(mut stdin) = c.stdin.take() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                c.wait().map(|s| s.success()).unwrap_or(false)
+            } else {
+                false
+            }
+        };
+        if !ok_clip {
+            return Err("Нужен wl-copy или xclip".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        if Command::new("xdotool")
+            .args(["key", "ctrl+v"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        if Command::new("ydotool")
+            .args(["key", "29:1", "47:1", "47:0", "29:0"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        return Err("Нужен xdotool или ydotool для вставки".into());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("type_text не поддерживается".into())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let mut n = (chunk[0] as u32) << 16;
+        if chunk.len() > 1 {
+            n |= (chunk[1] as u32) << 8;
+        }
+        if chunk.len() > 2 {
+            n |= chunk[2] as u32;
+        }
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((n >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(n & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 #[cfg(target_os = "macos")]
 fn post_media_key_macos(key: i64) -> Result<(), String> {
     use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
@@ -472,6 +619,7 @@ pub fn run() {
             list_installed_apps,
             open_default_browser,
             media_key,
+            type_text,
             tts::tts_speak,
             tts::tts_status,
             tts::tts_dir,

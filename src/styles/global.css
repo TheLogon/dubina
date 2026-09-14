@@ -206,6 +206,10 @@ code {
   background: linear-gradient(145deg, #f0c36a, #fff1c9);
 }
 
+.orb--dictation .orb__core {
+  background: linear-gradient(145deg, #f0c36a, #fff1c9);
+}
+
 .orb--running .orb__core {
   background: linear-gradient(145deg, var(--accent-2), #8eebd8);
   box-shadow: 0 0 24px rgba(72, 201, 176, 0.45);
@@ -853,6 +857,90 @@ code {
 .captions__mic-btn {
   margin-top: 12px;
   width: 100%;
+}
+
+.docs__body {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-height: calc(100vh - 180px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.docs__section {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.docs__section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.docs__h {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+}
+
+.docs__lead {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.docs__example {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.docs__phrases {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.docs__phrases code,
+.docs__chatter-triggers code {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.docs__chatter {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.docs__chatter-card {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+}
+
+.docs__chatter-triggers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.docs__chatter-replies {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
 }
 
 @media (max-width: 720px) {

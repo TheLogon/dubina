@@ -25,9 +25,9 @@ export interface Scenario {
   builtin?: boolean;
 }
 
-export type AppView = "home" | "scenarios" | "editor" | "settings";
+export type AppView = "home" | "scenarios" | "editor" | "settings" | "docs";
 
-export type ListenerState = "idle" | "wake" | "listening" | "running" | "error";
+export type ListenerState = "idle" | "wake" | "listening" | "running" | "error" | "dictation";
 
 export const STEP_LABELS: Record<StepType, string> = {
   open_app: "Открыть программу",

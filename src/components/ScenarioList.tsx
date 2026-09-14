@@ -22,8 +22,8 @@ export function ScenarioList({
         <div>
           <h2 className="panel__title">Сценарии</h2>
           <p className="panel__sub">
-            Встроенные: музыка, браузер, пауза… Плюс болтовня: «привет», «как
-            дела», подколы — без сценария.
+            Встроенные: музыка, браузер, «напиши текст» (диктовка в чат),
+            болтовня — «привет», «как дела»…
           </p>
         </div>
         <button type="button" className="btn btn--primary" onClick={onCreate}>
