@@ -5,7 +5,13 @@ export const WAKE_WORDS = [
   "дубину",
   "дубине",
   "дубина",
+  "дубин",
+  "тубина",
+  "рубина",
+  "любина",
+  "убина",
   "dubina",
+  "doobina",
 ];
 
 export const WAKE_FORMS_RU = [
