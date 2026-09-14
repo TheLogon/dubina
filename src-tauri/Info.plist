@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Dubina нужен микрофон для голосовых команд и выбора устройства ввода.</string>
+	<string>Дубине нужен микрофон для голосовых команд и выбора устройства ввода.</string>
 </dict>
 </plist>

@@ -227,7 +227,7 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
           <div>
             <strong>Закрывать программу в трей</strong>
             <p className="muted">
-              Крестик прячет в трей, «Дубина» продолжает слушать. Выключено —
+              Крестик прячет в трей, Дубина продолжает слушать. Выключено —
               полный выход (голос останавливается).
             </p>
           </div>
@@ -241,7 +241,7 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
         <div className="toggle-row">
           <div>
             <strong>Автозапуск при старте системы</strong>
-            <p className="muted">Запускать Dubina вместе с системой.</p>
+            <p className="muted">Запускать Дубину вместе с системой.</p>
           </div>
           <Switch
             checked={settings.autostart}

@@ -116,7 +116,7 @@ export function ScenarioEditor({ scenario, onChange, onSave, onCancel }: Props) 
       </div>
 
       <label className="field field--lg">
-        <span>Что сказать после «Дубина»</span>
+        <span>Что сказать после обращения к Дубине</span>
         <input
           type="text"
           placeholder="пора поработать"

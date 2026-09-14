@@ -1,13 +1,17 @@
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::io::Write;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::process::Stdio;
 use serde::Serialize;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
+#[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
 
 mod tts;
@@ -380,7 +384,7 @@ fn type_text_inner(text: &str) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         if !status.success() {
             return Err(
-                "Не удалось вставить текст. Дай Dubina доступ в «Универсальный доступ»."
+                "Не удалось вставить текст. Дай Дубине доступ в «Универсальный доступ»."
                     .into(),
             );
         }
@@ -606,11 +610,18 @@ public class Media {{
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .macos_launcher(MacosLauncher::LaunchAgent)
-                .build(),
-        )
+        .plugin({
+            #[cfg(target_os = "macos")]
+            {
+                tauri_plugin_autostart::Builder::new()
+                    .macos_launcher(MacosLauncher::LaunchAgent)
+                    .build()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                tauri_plugin_autostart::Builder::new().build()
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             open_url,
             open_app,
@@ -628,14 +639,14 @@ pub fn run() {
         ])
         .setup(|app| {
             let show_i =
-                MenuItem::with_id(app, "show", "Показать Dubina", true, None::<&str>)?;
+                MenuItem::with_id(app, "show", "Показать Дубину", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .tooltip("Dubina")
+                .tooltip("Дубина")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
                         app.exit(0);

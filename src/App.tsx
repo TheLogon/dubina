@@ -519,7 +519,7 @@ function App() {
             >
               <h1 className="home__title">Dubina</h1>
               <p className="home__lead">
-                Скажи «Дубина» — и команду сценария.
+                Скажи «Дубина» — и команду.
               </p>
               <Orb state={listener} />
               {status && <p className="home__status">{status}</p>}

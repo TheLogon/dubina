@@ -7,6 +7,7 @@ import {
   DICTATION_START_PHRASES,
   DICTATION_STOP_PHRASES,
 } from "../commands/dictation";
+import { WAKE_FORMS_RU } from "../voice/wake";
 
 type Props = {
   onBack: () => void;
@@ -52,7 +53,7 @@ export function DocsView({ onBack }: Props) {
         <div>
           <h2 className="panel__title">Документация</h2>
           <p className="panel__sub">
-            Все встроенные команды. Сначала скажи «Дубина», потом фразу.
+            Все встроенные команды. Сначала обратись к Дубине, потом фраза.
           </p>
         </div>
         <button type="button" className="btn btn--ghost" onClick={onBack}>
@@ -63,9 +64,9 @@ export function DocsView({ onBack }: Props) {
       <div className="docs__body">
         <Section
           title="Пробуждение"
-          lead="Пока не услышит имя — команды не выполняются."
-          example="«Дубина» или «Дубина, включи музыку»"
-          phrases={["дубина", "дубину", "дубины", "dubina"]}
+          lead="Пока не услышит имя — команды не выполняются. Подходят все падежи."
+          example="«Дубина» · «Дубину» · «Дубине, включи музыку»"
+          phrases={[...WAKE_FORMS_RU, "dubina"]}
         />
 
         <Section
@@ -120,7 +121,7 @@ export function DocsView({ onBack }: Props) {
           <p className="docs__lead">
             Во вкладке «Сценарии» можно добавить фразу и шаги: открыть
             программу, сайт, задержку, медиа. Они работают так же — после
-            «Дубина».
+            обращения к Дубине.
           </p>
         </section>
       </div>

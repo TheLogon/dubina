@@ -1,8 +1,7 @@
 import { normalizePhrase } from "../store/scenarios";
 import { requestMicrophoneAccess } from "./micPermission";
 import { loadVoskCreateModel } from "./loadVosk";
-
-const WAKE_WORDS = ["дубина", "дубину", "дубины", "dubina"];
+import { WAKE_WORDS } from "./wake";
 
 export function extractWakeAndCommand(text: string): {
   woke: boolean;
