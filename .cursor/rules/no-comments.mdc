@@ -1,0 +1,11 @@
+---
+description: No comments and no README.txt in the project
+alwaysApply: true
+---
+
+# No comments
+
+- Never add comments in code (`//`, `/* */`, `/** */`, `///`, JSX `{/* */}`).
+- Never create or update `README.txt` / `readme.txt`.
+- Do not leave explanatory comments when editing existing files; delete leftover comments you touch.
+- Keep required compiler directives only when unavoidable (e.g. `/// <reference types="vite/client" />`, `// @ts-expect-error` with a real need).
