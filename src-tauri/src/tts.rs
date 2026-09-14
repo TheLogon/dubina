@@ -22,6 +22,13 @@ fn cache_path(app: &AppHandle, text: &str) -> Result<PathBuf, String> {
 
 #[tauri::command]
 pub fn tts_warm_cache(app: AppHandle, phrases: Vec<String>) -> Result<u32, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let dir = piper_dir(&app)?;
+        if find_piper_bin(&dir).is_none() || find_piper_model(&dir).is_none() {
+            return Ok(0);
+        }
+    }
     let n = phrases.len() as u32;
     thread::spawn(move || {
         for raw in phrases {
@@ -48,7 +55,15 @@ fn synthesize_to_file(app: &AppHandle, text: &str, out: &Path) -> Result<(), Str
     if try_piper_to_file(app, text, out).is_ok() {
         return Ok(());
     }
-    system_tts_to_file(text, out)
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (text, out);
+        return Err("no piper".into());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        system_tts_to_file(text, out)
+    }
 }
 
 fn try_piper_to_file(app: &AppHandle, text: &str, out: &Path) -> Result<(), String> {
@@ -132,15 +147,19 @@ $s.Speak('{escaped}')
 $s.Dispose()
 "#
         );
-        let status = Command::new("powershell")
+        let status = crate::winutil::powershell()
             .args([
                 "-NoProfile",
                 "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
                 &ps,
             ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .map_err(|e| e.to_string())?;
         if status.success() && out.exists() {
@@ -185,19 +204,28 @@ pub fn tts_speak(app: AppHandle, text: String, volume: Option<f32>) -> Result<()
     }
     let vol = volume.unwrap_or(1.0).clamp(0.0, 1.0);
 
-    
-    if let Ok(cached) = cache_path(&app, text) {
-        if cached.exists() {
-            return play_wav_file(&cached, vol);
-        }
-    }
-
-    
-    if let Ok(path) = ensure_phrase_cached(&app, text) {
+    let path = cache_path(&app, text)?;
+    if path.exists() && path.metadata().map(|m| m.len() > 44).unwrap_or(false) {
         return play_wav_file(&path, vol);
     }
 
-    system_tts(text, vol)
+    if try_piper_to_file(&app, text, &path).is_ok() {
+        return play_wav_file(&path, vol);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = vol;
+        return Err("web-tts".into());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(cached) = ensure_phrase_cached(&app, text) {
+            return play_wav_file(&cached, vol);
+        }
+        system_tts(text, vol)
+    }
 }
 
 #[tauri::command]
@@ -264,20 +292,28 @@ fn find_piper_bin(dir: &Path) -> Option<PathBuf> {
 }
 
 fn which_exists(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-        || Command::new("where")
+    #[cfg(windows)]
+    {
+        let mut c = Command::new("where");
+        crate::winutil::no_window(&mut c);
+        return c
+            .arg(name)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("which")
             .arg(name)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
+    }
 }
 
 fn find_piper_model(dir: &Path) -> Option<PathBuf> {
@@ -337,7 +373,7 @@ fn play_wav_file(path: &Path, volume: f32) -> Result<(), String> {
             return Ok(());
         }
         let path_str = path.to_string_lossy().replace('"', "");
-        let status = Command::new("cmd")
+        let status = crate::winutil::cmd_exe()
             .args(["/C", "start", "/MIN", "", &path_str])
             .status()
             .map_err(|e| e.to_string())?;
@@ -410,35 +446,8 @@ fn system_tts(text: &str, volume: f32) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let escaped = text.replace('\'', "''");
-        let pct = (vol * 100.0).round() as i32;
-        let ps = format!(
-            r#"
-Add-Type -AssemblyName System.Speech
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$s.Rate = 2
-$s.Volume = {pct}
-$ru = $s.GetInstalledVoices() | Where-Object {{ $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ru*' }} | Select-Object -First 1
-if ($ru) {{ $s.SelectVoice($ru.VoiceInfo.Name) }}
-$s.Speak('{escaped}')
-$s.Dispose()
-"#
-        );
-        let status = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &ps,
-            ])
-            .status()
-            .map_err(|e| e.to_string())?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err("SAPI TTS failed".into());
+        let _ = (text, vol);
+        Err("web-tts".into())
     }
 
     #[cfg(target_os = "linux")]
@@ -567,9 +576,14 @@ fn is_process_running(name: &str) -> bool {
         } else {
             format!("{name}.exe")
         };
-        let output = Command::new("tasklist")
-            .args(["/FI", &format!("IMAGENAME eq {exe}"), "/NH"])
-            .output();
+        let output = {
+            let mut c = Command::new("tasklist");
+            crate::winutil::no_window(&mut c);
+            c.args(["/FI", &format!("IMAGENAME eq {exe}"), "/NH"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output()
+        };
         if let Ok(o) = output {
             let s = String::from_utf8_lossy(&o.stdout).to_lowercase();
             return s.contains(&exe.to_lowercase());

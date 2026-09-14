@@ -16,6 +16,7 @@ use tauri::{
 use tauri_plugin_autostart::MacosLauncher;
 
 mod tts;
+mod winutil;
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 struct InstalledApp {
@@ -108,15 +109,19 @@ if ($d.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { '' ; exit 0 }
 $name = [IO.Path]::GetFileNameWithoutExtension($d.FileName)
 @{ name = $name; path = $d.FileName } | ConvertTo-Json -Compress
 "#;
-        let output = Command::new("powershell")
+        let output = crate::winutil::powershell()
             .args([
                 "-NoProfile",
                 "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
                 ps,
             ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
             .output()
             .map_err(|e| e.to_string())?;
         let raw = String::from_utf8_lossy(&output.stdout);
@@ -259,15 +264,19 @@ if (Test-Path -LiteralPath $lap) {
 $list | ConvertTo-Json -Compress -Depth 3
 "#;
 
-    let output = Command::new("powershell")
+    let output = crate::winutil::powershell()
         .args([
             "-NoProfile",
             "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
             ps,
         ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
         .output();
 
     if let Ok(out) = output {
@@ -427,7 +436,7 @@ pub(crate) fn open_app_inner(name: &str) -> Result<(), String> {
             if status.success() {
                 return Ok(());
             }
-            let status = Command::new("cmd")
+            let status = crate::winutil::cmd_exe()
                 .args(["/C", "start", "", name])
                 .status()
                 .map_err(|e| e.to_string())?;
@@ -436,7 +445,7 @@ pub(crate) fn open_app_inner(name: &str) -> Result<(), String> {
             }
             return Err(format!("Не удалось открыть: {name}"));
         }
-        let status = Command::new("cmd")
+        let status = crate::winutil::cmd_exe()
             .args(["/C", "start", "", name])
             .status()
             .map_err(|e| e.to_string())?;
@@ -528,8 +537,12 @@ fn close_app(name: String) -> Result<(), String> {
         } else {
             format!("{app_name}.exe")
         };
-        let _ = Command::new("taskkill")
+        let mut c = Command::new("taskkill");
+        crate::winutil::no_window(&mut c);
+        let _ = c
             .args(["/IM", &exe, "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| e.to_string())?;
         return Ok(());
@@ -610,8 +623,17 @@ Start-Sleep -Milliseconds 80
 [System.Windows.Forms.SendKeys]::SendWait('^v')
 "#
         );
-        let status = Command::new("powershell")
-            .args(["-NoProfile", "-Command", &ps])
+        let status = crate::winutil::powershell()
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &ps,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| e.to_string())?;
         if !status.success() {
@@ -765,8 +787,17 @@ public class Media {{
 [Media]::keybd_event({vk}, 0, 2, 0)
 "#
         );
-        let status = Command::new("powershell")
-            .args(["-NoProfile", "-Command", &ps])
+        let status = crate::winutil::powershell()
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &ps,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| e.to_string())?;
         if !status.success() {
