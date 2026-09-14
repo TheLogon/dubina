@@ -26,3 +26,6 @@ dist-ssr
 # Large local STT model
 public/vosk-ru-small.bin
 public/models/**
+
+release/
+src-tauri/target/

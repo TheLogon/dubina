@@ -17,10 +17,13 @@ jobs:
         include:
           - platform: macos-latest
             args: --target aarch64-apple-darwin
+            name: macos
           - platform: windows-latest
             args: ""
+            name: windows
           - platform: ubuntu-22.04
             args: ""
+            name: linux
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -50,14 +53,25 @@ jobs:
       - name: install frontend dependencies
         run: npm ci
 
-      - uses: tauri-apps/tauri-action@v1
+      - name: build tauri
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: v__VERSION__
           releaseName: Dubina v__VERSION__
-          releaseBody: Linux, macOS and Windows builds
-          releaseDraft: true
+          releaseBody: Сборки Linux, macOS и Windows
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
           uploadUnsignedMacos: true
+
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dubina-${{ matrix.name }}
+          path: |
+            src-tauri/target/release/bundle/**
+            src-tauri/target/aarch64-apple-darwin/release/bundle/**
+          if-no-files-found: warn
+          retention-days: 30
