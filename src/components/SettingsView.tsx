@@ -17,6 +17,10 @@ import { CustomSelect } from "./ui/CustomSelect";
 import { Switch } from "./ui/Switch";
 import { VolumeSlider } from "./ui/VolumeSlider";
 import { AppPicker } from "./AppPicker";
+import {
+  checkForAppUpdate,
+  currentAppVersion,
+} from "../updater";
 
 type Props = {
   onBack: () => void;
@@ -31,6 +35,9 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [ttsStatus, setTtsStatus] = useState("…");
   const [ttsDir, setTtsDir] = useState("");
+  const [appVersion, setAppVersion] = useState("…");
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -65,7 +72,32 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
 
   useEffect(() => {
     void refreshTts();
+    void currentAppVersion().then(setAppVersion);
   }, []);
+
+  async function runUpdateCheck() {
+    setUpdateBusy(true);
+    setUpdateStatus("Проверяю обновления…");
+    const result = await checkForAppUpdate({ install: true });
+    switch (result.status) {
+      case "up-to-date":
+        setUpdateStatus(`Уже последняя версия (${result.version})`);
+        break;
+      case "available":
+        setUpdateStatus(`Доступна ${result.version}`);
+        break;
+      case "updating":
+        setUpdateStatus(`Ставлю ${result.version}…`);
+        break;
+      case "dev":
+        setUpdateStatus(result.message);
+        break;
+      case "error":
+        setUpdateStatus(result.message);
+        break;
+    }
+    setUpdateBusy(false);
+  }
 
   async function refreshTts() {
     try {
@@ -122,7 +154,8 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
         <h3>Музыка</h3>
         <p className="muted">
           Команда «включи музыку» откроет выбранный плеер, дождётся запуска и
-          нажмёт Play.
+          нажмёт Play. Если Яндекс Музыки нет в списке — «Указать файл…» или
+          поиск по «яндекс» / «yandex» (в т.ч. из Microsoft Store).
         </p>
         <div className="field field--settings">
           <span>Плеер по умолчанию</span>
@@ -216,6 +249,25 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
             onClick={() => void refreshTts()}
           >
             Обновить статус
+          </button>
+        </div>
+      </section>
+
+      <section className="settings-block">
+        <h3>Обновления</h3>
+        <p className="muted">
+          Текущая версия: <code>{appVersion}</code>. При релизе на GitHub
+          приложение само подтянет обновление.
+        </p>
+        {updateStatus && <p className="tts-status">{updateStatus}</p>}
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="btn btn--chip"
+            disabled={updateBusy}
+            onClick={() => void runUpdateCheck()}
+          >
+            {updateBusy ? "Проверяю…" : "Проверить обновления"}
           </button>
         </div>
       </section>

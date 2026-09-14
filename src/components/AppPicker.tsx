@@ -19,33 +19,53 @@ export function AppPicker({ value, onChange }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  async function reload(refresh = false) {
+    setLoading(true);
+    try {
+      const list = await invoke<InstalledApp[]>("list_installed_apps", {
+        refresh,
+      });
+      setApps(list);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось загрузить список");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    void (async () => {
-      setLoading(true);
-      try {
-        const list = await invoke<InstalledApp[]>("list_installed_apps");
-        setApps(list);
-        setError(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Не удалось загрузить список");
-      } finally {
-        setLoading(false);
-      }
-    })();
+    void reload(false);
   }, []);
 
   const selected = apps.find((a) => a.path === value || a.name === value);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return apps.slice(0, 80);
+    if (!q) return apps.slice(0, 120);
     return apps
       .filter(
         (a) =>
           a.name.toLowerCase().includes(q) || a.path.toLowerCase().includes(q),
       )
-      .slice(0, 80);
+      .slice(0, 120);
   }, [apps, query]);
+
+  async function pickFile() {
+    try {
+      const app = await invoke<InstalledApp | null>("pick_app_file");
+      if (!app) return;
+      setApps((prev) => {
+        if (prev.some((a) => a.path === app.path)) return prev;
+        return [app, ...prev];
+      });
+      onChange(app);
+      setOpen(false);
+      setQuery("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось выбрать файл");
+    }
+  }
 
   return (
     <div className="app-picker">
@@ -70,11 +90,23 @@ export function AppPicker({ value, onChange }: Props) {
           >
             <input
               className="app-picker__search"
-              placeholder="Поиск…"
+              placeholder="Поиск (яндекс, spotify…)"
               value={query}
               autoFocus
               onChange={(e) => setQuery(e.target.value)}
             />
+            <div className="app-picker__actions">
+              <button type="button" className="btn btn--chip" onClick={() => void pickFile()}>
+                Указать файл…
+              </button>
+              <button
+                type="button"
+                className="btn btn--chip"
+                onClick={() => void reload(true)}
+              >
+                Обновить
+              </button>
+            </div>
             {loading && <p className="muted">Загрузка приложений…</p>}
             {error && <p className="banner banner--error">{error}</p>}
             <ul className="app-picker__list">
@@ -97,7 +129,7 @@ export function AppPicker({ value, onChange }: Props) {
                 </li>
               ))}
               {!loading && filtered.length === 0 && (
-                <li className="muted">Ничего не найдено</li>
+                <li className="muted">Ничего не найдено — укажи файл вручную</li>
               )}
             </ul>
           </motion.div>

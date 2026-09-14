@@ -28,6 +28,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -39,6 +40,17 @@
     "macOS": {
       "minimumSystemVersion": "10.15",
       "infoPlist": "Info.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI5MzMxNDU3QjIwNjkxQUMKUldTc2tRYXlWeFF6S1lscGtlTmM5b3hQZlhhNlpyU0tyOTNYN1dZZlIrRG5WbmhUVWZ3dXI4bzcK",
+      "endpoints": [
+        "https://github.com/TheLogon/dubina/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

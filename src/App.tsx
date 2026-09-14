@@ -29,6 +29,8 @@ import {
 import { runScenario } from "./executor/runScenario";
 import { playActionSafe, warmTtsCache, speakSafe } from "./audio/soundPlayer";
 import { loadSettings, type AppSettings } from "./store/settings";
+import { checkForAppUpdate } from "./updater";
+import { listen } from "@tauri-apps/api/event";
 import {
   extractWakeAndCommand,
   MicPermissionError,
@@ -384,11 +386,55 @@ function App() {
   };
 
   useEffect(() => {
-    
     const t = window.setTimeout(() => {
       void warmTtsCache();
     }, 4000);
     return () => window.clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    async function runCheck(showIdle: boolean) {
+      if (showIdle) setStatus("Проверяю обновления…");
+      const result = await checkForAppUpdate({ install: true });
+      if (cancelled) return;
+      if (result.status === "up-to-date") {
+        if (showIdle) setStatus(`Версия актуальна (${result.version})`);
+        return;
+      }
+      if (result.status === "updating") {
+        setStatus(`Обновляю до ${result.version}…`);
+        return;
+      }
+      if (result.status === "available") {
+        setStatus(`Доступна версия ${result.version}`);
+        return;
+      }
+      if (result.status === "error" && showIdle) {
+        setStatus(result.message);
+      }
+      if (result.status === "dev" && showIdle) {
+        setStatus(result.message);
+      }
+    }
+
+    void listen("dubina://check-updates", () => {
+      void runCheck(true);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    const auto = window.setTimeout(() => {
+      void runCheck(false);
+    }, 8000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(auto);
+      unlisten?.();
+    };
   }, []);
 
   

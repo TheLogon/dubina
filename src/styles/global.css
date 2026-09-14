@@ -755,6 +755,13 @@ code {
   outline: none;
 }
 
+.app-picker__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .app-picker__list {
   list-style: none;
   margin: 0;

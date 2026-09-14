@@ -11,9 +11,12 @@
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:tray:default",
+    "core:event:default",
     "opener:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
-    "autostart:allow-is-enabled"
+    "autostart:allow-is-enabled",
+    "updater:default",
+    "process:default"
   ]
 }

@@ -92,7 +92,6 @@ fn try_piper_to_file(app: &AppHandle, text: &str, out: &Path) -> Result<(), Stri
 fn system_tts_to_file(text: &str, out: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        
         for voice in ["Milena", "Yuri", "Katya", "Milena (Premium)"] {
             let status = Command::new("say")
                 .args(["-v", voice, "-r", "210", "-o"])
@@ -116,7 +115,62 @@ fn system_tts_to_file(text: &str, out: &Path) -> Result<(), String> {
         }
         return Err("say failed".into());
     }
-    #[cfg(not(target_os = "macos"))]
+
+    #[cfg(target_os = "windows")]
+    {
+        let out_path = out.to_string_lossy().replace('\'', "''");
+        let escaped = text.replace('\'', "''");
+        let ps = format!(
+            r#"
+Add-Type -AssemblyName System.Speech
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$s.Rate = 2
+$ru = $s.GetInstalledVoices() | Where-Object {{ $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ru*' }} | Select-Object -First 1
+if ($ru) {{ $s.SelectVoice($ru.VoiceInfo.Name) }}
+$s.SetOutputToWaveFile('{out_path}')
+$s.Speak('{escaped}')
+$s.Dispose()
+"#
+        );
+        let status = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &ps,
+            ])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() && out.exists() {
+            return Ok(());
+        }
+        return Err("SAPI wave failed".into());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let out_str = out.to_string_lossy();
+        for (bin, extra) in [
+            ("espeak-ng", vec!["-v", "ru", "-w", out_str.as_ref()]),
+            ("espeak", vec!["-v", "ru", "-w", out_str.as_ref()]),
+        ] {
+            let mut cmd = Command::new(bin);
+            cmd.args(&extra).arg(text);
+            if cmd
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+                && out.exists()
+            {
+                return Ok(());
+            }
+        }
+        return Err("espeak wave failed".into());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (text, out);
         Err("system cache unsupported".into())
@@ -161,9 +215,18 @@ pub fn tts_status(app: AppHandle) -> Result<String, String> {
         (Some(_), None) => "Есть piper, нет .onnx модели. Положи русский голос Piper в папку.".into(),
         _ => {
             let p = dir.display().to_string();
-            format!(
-                "Piper не найден — пока системный голос.\nПоложи в:\n{p}\n• piper (бинарник)\n• *.onnx + *.onnx.json (русский голос)\nиз https://github.com/OHF-Voice/piper1-gpl"
-            )
+            #[cfg(target_os = "windows")]
+            {
+                format!(
+                    "Piper не найден — используется системный голос Windows (SAPI).\nДля русского голоса: Параметры → Время и язык → Речь → добавь русский голос.\nИли положи Piper в:\n{p}"
+                )
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                format!(
+                    "Piper не найден — пока системный голос.\nПоложи в:\n{p}\n• piper (бинарник)\n• *.onnx + *.onnx.json (русский голос)\nиз https://github.com/OHF-Voice/piper1-gpl"
+                )
+            }
         }
     })
 }
@@ -230,6 +293,30 @@ fn find_piper_model(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(target_os = "windows")]
+fn play_wav_winmm(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "winmm")]
+    extern "system" {
+        fn PlaySoundW(psz_sound: *const u16, hmod: isize, fdw_sound: u32) -> i32;
+    }
+    const SND_SYNC: u32 = 0x0000;
+    const SND_FILENAME: u32 = 0x00020000;
+    const SND_NODEFAULT: u32 = 0x0002;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        PlaySoundW(
+            wide.as_ptr(),
+            0,
+            SND_SYNC | SND_FILENAME | SND_NODEFAULT,
+        ) != 0
+    }
+}
+
 fn play_wav_file(path: &Path, volume: f32) -> Result<(), String> {
     let vol = volume.clamp(0.0, 1.0);
     #[cfg(target_os = "macos")]
@@ -246,12 +333,12 @@ fn play_wav_file(path: &Path, volume: f32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let _ = vol;
-        let ps = format!(
-            r#"(New-Object Media.SoundPlayer "{}").PlaySync()"#,
-            path.to_string_lossy().replace('"', "")
-        );
-        let status = Command::new("powershell")
-            .args(["-NoProfile", "-Command", &ps])
+        if play_wav_winmm(path) {
+            return Ok(());
+        }
+        let path_str = path.to_string_lossy().replace('"', "");
+        let status = Command::new("cmd")
+            .args(["/C", "start", "/MIN", "", &path_str])
             .status()
             .map_err(|e| e.to_string())?;
         if status.success() {
@@ -326,10 +413,26 @@ fn system_tts(text: &str, volume: f32) -> Result<(), String> {
         let escaped = text.replace('\'', "''");
         let pct = (vol * 100.0).round() as i32;
         let ps = format!(
-            "Add-Type -AssemblyName System.Speech; $s=New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate=0; $s.Volume={pct}; $s.Speak('{escaped}')"
+            r#"
+Add-Type -AssemblyName System.Speech
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$s.Rate = 2
+$s.Volume = {pct}
+$ru = $s.GetInstalledVoices() | Where-Object {{ $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ru*' }} | Select-Object -First 1
+if ($ru) {{ $s.SelectVoice($ru.VoiceInfo.Name) }}
+$s.Speak('{escaped}')
+$s.Dispose()
+"#
         );
         let status = Command::new("powershell")
-            .args(["-NoProfile", "-Command", &ps])
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &ps,
+            ])
             .status()
             .map_err(|e| e.to_string())?;
         if status.success() {
@@ -379,15 +482,18 @@ pub fn start_music_player(app_path: String) -> Result<(), String> {
     crate::open_app_inner(app_path)?;
 
     let name = process_name_from_path(app_path);
-    let ok = wait_until_running(&name, Duration::from_secs(25));
-    if !ok {
-        return Err(format!(
-            "Приложение «{name}» не запустилось вовремя. Проверь путь в настройках."
-        ));
+    let is_shell = app_path.starts_with("shell:") || app_path.contains('!');
+    if is_shell {
+        thread::sleep(Duration::from_millis(3500));
+    } else {
+        let ok = wait_until_running(&name, Duration::from_secs(25));
+        if !ok {
+            return Err(format!(
+                "Приложение «{name}» не запустилось вовремя. Проверь путь в настройках."
+            ));
+        }
+        thread::sleep(Duration::from_millis(1200));
     }
-
-    
-    thread::sleep(Duration::from_millis(1200));
 
     #[cfg(target_os = "macos")]
     {

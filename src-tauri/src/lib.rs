@@ -1,26 +1,29 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::io::Write;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::Stdio;
 use serde::Serialize;
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    Emitter, Manager,
 };
 #[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
 
 mod tts;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 struct InstalledApp {
     name: String,
     path: String,
 }
+
+static APP_LIST_CACHE: Mutex<Option<Vec<InstalledApp>>> = Mutex::new(None);
 
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
@@ -39,7 +42,16 @@ fn open_default_browser() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn list_installed_apps() -> Result<Vec<InstalledApp>, String> {
+fn list_installed_apps(refresh: Option<bool>) -> Result<Vec<InstalledApp>, String> {
+    let refresh = refresh.unwrap_or(false);
+    if !refresh {
+        if let Ok(guard) = APP_LIST_CACHE.lock() {
+            if let Some(cached) = guard.as_ref() {
+                return Ok(cached.clone());
+            }
+        }
+    }
+
     let mut apps: Vec<InstalledApp> = Vec::new();
 
     #[cfg(target_os = "macos")]
@@ -59,13 +71,7 @@ fn list_installed_apps() -> Result<Vec<InstalledApp>, String> {
 
     #[cfg(target_os = "windows")]
     {
-        
-        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
-        let program_files_x86 =
-            std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| r"C:\Program Files (x86)".into());
-        for dir in [program_files, program_files_x86] {
-            collect_windows_exes(Path::new(&dir), &mut apps, 0);
-        }
+        collect_windows_apps(&mut apps);
     }
 
     #[cfg(target_os = "linux")]
@@ -82,12 +88,104 @@ fn list_installed_apps() -> Result<Vec<InstalledApp>, String> {
     }
 
     apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    apps.dedup_by(|a, b| a.path == b.path);
+    apps.dedup_by(|a, b| a.path.eq_ignore_ascii_case(&b.path));
+    if let Ok(mut guard) = APP_LIST_CACHE.lock() {
+        *guard = Some(apps.clone());
+    }
     Ok(apps)
 }
 
+#[tauri::command]
+fn pick_app_file() -> Result<Option<InstalledApp>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let ps = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$d = New-Object System.Windows.Forms.OpenFileDialog
+$d.Filter = 'Programs (*.exe)|*.exe|All files (*.*)|*.*'
+$d.Title = 'Выбери программу'
+if ($d.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { '' ; exit 0 }
+$name = [IO.Path]::GetFileNameWithoutExtension($d.FileName)
+@{ name = $name; path = $d.FileName } | ConvertTo-Json -Compress
+"#;
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                ps,
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let raw = String::from_utf8_lossy(&output.stdout);
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let app: InstalledApp =
+            serde_json::from_str(trimmed).map_err(|e| e.to_string())?;
+        return Ok(Some(app));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("osascript")
+            .args([
+                "-e",
+                "POSIX path of (choose file of type {\"app\",\"public.unix-executable\"} with prompt \"Выбери программу\")",
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            return Ok(None);
+        }
+        let name = Path::new(&path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("App")
+            .to_string();
+        return Ok(Some(InstalledApp { name, path }));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let output = Command::new("zenity")
+            .args(["--file-selection", "--title=Выбери программу"])
+            .output();
+        let Ok(out) = output else {
+            return Err("Нужен zenity для выбора файла".into());
+        };
+        if !out.status.success() {
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if path.is_empty() {
+            return Ok(None);
+        }
+        let name = Path::new(&path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("App")
+            .to_string();
+        return Ok(Some(InstalledApp { name, path }));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("Не поддерживается".into())
+    }
+}
+
 fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 #[cfg(target_os = "macos")]
@@ -112,25 +210,116 @@ fn collect_macos_apps(dir: &Path, apps: &mut Vec<InstalledApp>) {
 }
 
 #[cfg(target_os = "windows")]
-fn collect_windows_exes(dir: &Path, apps: &mut Vec<InstalledApp>, depth: u8) {
-    if depth > 2 {
-        return;
+fn collect_windows_apps(apps: &mut Vec<InstalledApp>) {
+    push_windows_known_music(apps);
+
+    let ps = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$list = New-Object System.Collections.Generic.List[object]
+function Add-App([string]$name, [string]$path) {
+  if (-not $name -or -not $path) { return }
+  if ($name -match '(?i)^(uninstall|удалить|setup|install|update|updater|help|справка|readme)') { return }
+  $list.Add([pscustomobject]@{ name = $name; path = $path })
+}
+try {
+  Get-StartApps | ForEach-Object {
+    $id = [string]$_.AppID
+    if (-not $id) { return }
+    if ($id -match '(?i)(uninstall|update)') { return }
+    Add-App $_.Name ("shell:AppsFolder\" + $id)
+  }
+} catch {}
+$shell = New-Object -ComObject WScript.Shell
+$roots = @(
+  (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'),
+  (Join-Path $env:AppData 'Microsoft\Windows\Start Menu\Programs')
+)
+foreach ($root in $roots) {
+  if (-not (Test-Path -LiteralPath $root)) { continue }
+  Get-ChildItem -LiteralPath $root -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+    try {
+      $sc = $shell.CreateShortcut($_.FullName)
+      $target = [string]$sc.TargetPath
+      if ($target -and ($target -match '\.exe$') -and (Test-Path -LiteralPath $target)) {
+        if ($target -notmatch '(?i)\\(uninstall|update|crash|helper|setup)[^\\]*\.exe$') {
+          Add-App $_.BaseName $target
+        }
+      }
+    } catch {}
+  }
+}
+$lap = Join-Path $env:LOCALAPPDATA 'Programs'
+if (Test-Path -LiteralPath $lap) {
+  Get-ChildItem -LiteralPath $lap -Filter '*.exe' -Recurse -Depth 3 -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.Name -notmatch '(?i)^(unins|update|crash|helper|setup)') {
+      Add-App $_.BaseName $_.FullName
     }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_windows_exes(&path, apps, depth + 1);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("exe") {
-            let name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("App")
-                .to_string();
+  }
+}
+$list | ConvertTo-Json -Compress -Depth 3
+"#;
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            ps,
+        ])
+        .output();
+
+    if let Ok(out) = output {
+        let raw = String::from_utf8_lossy(&out.stdout);
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            if let Ok(parsed) = serde_json::from_str::<Vec<InstalledApp>>(trimmed) {
+                apps.extend(parsed);
+            } else if let Ok(one) = serde_json::from_str::<InstalledApp>(trimmed) {
+                apps.push(one);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn push_windows_known_music(apps: &mut Vec<InstalledApp>) {
+    let mut candidates: Vec<(&str, PathBuf)> = Vec::new();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        candidates.extend([
+            (
+                "Яндекс Музыка",
+                local.join(r"Programs\YandexMusic\YandexMusic.exe"),
+            ),
+            (
+                "Яндекс Музыка",
+                local.join(r"Yandex\YandexMusic\YandexMusic.exe"),
+            ),
+            (
+                "Яндекс Музыка",
+                local.join(r"Programs\Yandex Music\YandexMusic.exe"),
+            ),
+            ("Spotify", local.join(r"Spotify\Spotify.exe")),
+            (
+                "Spotify",
+                local.join(r"Microsoft\WindowsApps\Spotify.exe"),
+            ),
+        ]);
+    }
+    for key in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(pf) = std::env::var_os(key).map(PathBuf::from) {
+            candidates.push((
+                "Яндекс Музыка",
+                pf.join(r"Yandex\YandexMusic\YandexMusic.exe"),
+            ));
+            candidates.push(("Spotify", pf.join(r"Spotify\Spotify.exe")));
+        }
+    }
+    for (name, path) in candidates {
+        if path.is_file() {
             apps.push(InstalledApp {
-                name,
+                name: name.into(),
                 path: path.to_string_lossy().to_string(),
             });
         }
@@ -230,6 +419,23 @@ pub(crate) fn open_app_inner(name: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        if name.starts_with("shell:") || name.contains('!') {
+            let status = Command::new("explorer")
+                .arg(name)
+                .status()
+                .map_err(|e| e.to_string())?;
+            if status.success() {
+                return Ok(());
+            }
+            let status = Command::new("cmd")
+                .args(["/C", "start", "", name])
+                .status()
+                .map_err(|e| e.to_string())?;
+            if status.success() {
+                return Ok(());
+            }
+            return Err(format!("Не удалось открыть: {name}"));
+        }
         let status = Command::new("cmd")
             .args(["/C", "start", "", name])
             .status()
@@ -610,6 +816,8 @@ public class Media {{
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin({
             #[cfg(target_os = "macos")]
             {
@@ -628,6 +836,7 @@ pub fn run() {
             close_app,
             quit_app,
             list_installed_apps,
+            pick_app_file,
             open_default_browser,
             media_key,
             type_text,
@@ -640,8 +849,16 @@ pub fn run() {
         .setup(|app| {
             let show_i =
                 MenuItem::with_id(app, "show", "Показать Дубину", true, None::<&str>)?;
+            let update_i = MenuItem::with_id(
+                app,
+                "check_updates",
+                "Проверить обновления",
+                true,
+                None::<&str>,
+            )?;
+            let sep = PredefinedMenuItem::separator(app)?;
             let quit_i = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let menu = Menu::with_items(app, &[&show_i, &update_i, &sep, &quit_i])?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -655,6 +872,15 @@ pub fn run() {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
+                        }
+                    }
+                    "check_updates" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.emit("dubina://check-updates", ());
+                        } else {
+                            let _ = app.emit("dubina://check-updates", ());
                         }
                     }
                     _ => {}
