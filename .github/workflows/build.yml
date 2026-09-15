@@ -65,7 +65,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: Dubina v__VERSION__
-          releaseBody: Сборки Linux, macOS и Windows. Обновление подтянется автоматически.
+          releaseBody: Сборки Linux, MacOS и Windows.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
