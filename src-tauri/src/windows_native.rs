@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, WPARAM};
+use windows::core::{BOOL, PCWSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_CONTROL, VK_MEDIA_NEXT_TRACK,
     VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK,
 };
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
     IsWindowVisible, SendMessageW, SetForegroundWindow, ShowWindow, HWND_BROADCAST,
@@ -33,8 +34,8 @@ pub fn send_media_key(action: &str) -> Result<(), String> {
         let _ = SendMessageW(
             HWND_BROADCAST,
             WM_APPCOMMAND,
-            WPARAM(0),
-            LPARAM((app_cmd << 16) as isize),
+            Some(WPARAM(0)),
+            Some(LPARAM((app_cmd << 16) as isize)),
         );
     }
 
@@ -77,8 +78,8 @@ fn send_appcommand_play(hwnd: HWND) {
         let _ = SendMessageW(
             hwnd,
             WM_APPCOMMAND,
-            wparam,
-            LPARAM((APPCOMMAND_MEDIA_PLAY << 16) as isize),
+            Some(wparam),
+            Some(LPARAM((APPCOMMAND_MEDIA_PLAY << 16) as isize)),
         );
     }
 }
@@ -86,7 +87,7 @@ fn send_appcommand_play(hwnd: HWND) {
 pub fn send_media_play() {
     unsafe {
         let fg = GetForegroundWindow();
-        if fg.0 != 0 {
+        if !fg.0.is_null() {
             send_appcommand_play(fg);
         }
         send_appcommand_play(HWND_BROADCAST);
