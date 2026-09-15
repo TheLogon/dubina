@@ -1,4 +1,11 @@
 import type { Scenario, ScenarioStep, StepType } from "../types/scenario";
+import {
+  commandTextFromUtterance,
+  normalizePhrase,
+  pickBestPhraseMatch,
+} from "../voice/matchCommand";
+
+export { normalizePhrase };
 
 const STORAGE_KEY = "dubina.scenarios.v1";
 
@@ -57,27 +64,11 @@ export function deleteScenario(scenarios: Scenario[], id: string): Scenario[] {
   return next;
 }
 
-export function normalizePhrase(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/ё/g, "е")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 export function findScenarioByPhrase(
   scenarios: Scenario[],
   spoken: string,
 ): Scenario | undefined {
-  const needle = normalizePhrase(spoken);
-  if (!needle) return undefined;
-
-  const exact = scenarios.find((s) => normalizePhrase(s.phrase) === needle);
-  if (exact) return exact;
-
-  return scenarios.find((s) => {
-    const p = normalizePhrase(s.phrase);
-    return p.includes(needle) || needle.includes(p);
-  });
+  const text = commandTextFromUtterance(spoken);
+  if (!text) return undefined;
+  return pickBestPhraseMatch(text, scenarios, (s) => s.phrase);
 }

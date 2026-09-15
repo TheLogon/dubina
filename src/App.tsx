@@ -14,7 +14,7 @@ import {
   normalizePhrase,
   upsertScenario,
 } from "./store/scenarios";
-import { findBuiltinByPhrase } from "./commands/builtins";
+import { findBuiltinByPhrase, fetchWeatherLine, isWeatherRequest } from "./commands/builtins";
 import { findChatterReply } from "./commands/chatter";
 import {
   isDictationStop,
@@ -37,6 +37,7 @@ import {
   startVoiceController,
   type VoiceController,
 } from "./voice/engine";
+import { commandTextFromUtterance } from "./voice/matchCommand";
 import "./styles/global.css";
 
 function App() {
@@ -93,7 +94,7 @@ function App() {
   }
 
   function replyChatter(phrase: string): boolean {
-    const key = normalizePhrase(phrase);
+    const key = normalizePhrase(commandTextFromUtterance(phrase));
     const last = lastChatterRef.current;
     if (last && last.phrase === key && Date.now() - last.at < 3000) {
       return true;
@@ -101,12 +102,12 @@ function App() {
     const reply = findChatterReply(phrase);
     if (!reply) return false;
     lastChatterRef.current = { at: Date.now(), phrase: key };
-    resetToIdle();
     setListener("idle");
     setStatus(reply);
     setCaption("");
     setCaptionFinal("");
     speakSafe(reply);
+    enterCommandMode();
     return true;
   }
 
@@ -119,9 +120,9 @@ function App() {
 
   function enterCommandMode() {
     modeRef.current = "command";
+    wakeLatchRef.current = false;
     setListener("listening");
-    setStatus("Слушаю команду…");
-    setCaptionFinal("");
+    setStatus("Слушаю… можно без «Дубина»");
     clearCommandTimer();
     commandTimerRef.current = window.setTimeout(() => {
       if (modeRef.current !== "command") return;
@@ -131,23 +132,76 @@ function App() {
       setStatus(null);
       setCaption("");
       setCaptionFinal("");
-    }, 12000);
-  }
-
-  function resetToIdle() {
-    clearCommandTimer();
-    modeRef.current = "idle";
-    wakeLatchRef.current = false;
+    }, 25000);
   }
 
   function failUnknown() {
     playActionSafe("error");
     setListener("error");
-    setStatus("Не понял");
-    resetToIdle();
+    setStatus("Не понял — говори ещё");
     setCaption("");
     setCaptionFinal("");
-    window.setTimeout(() => setListener("idle"), 1200);
+    window.setTimeout(() => {
+      enterCommandMode();
+    }, 900);
+  }
+
+  function wakeAck() {
+    setListener("wake");
+    playActionSafe("wake");
+  }
+
+  async function handleWeather() {
+    busyRef.current = true;
+    setListener("running");
+    setStatus("Смотрю погоду…");
+    try {
+      const line = await fetchWeatherLine();
+      setStatus(line);
+      speakSafe(line);
+      enterCommandMode();
+    } catch {
+      failUnknown();
+    } finally {
+      busyRef.current = false;
+    }
+  }
+
+  async function resolveSpoken(raw: string): Promise<boolean> {
+    const phrase = commandTextFromUtterance(raw);
+    if (!phrase) return false;
+
+    if (tryDictationCommand(phrase)) return true;
+
+    if (isWeatherRequest(phrase)) {
+      void revealWindow();
+      await handleWeather();
+      return true;
+    }
+
+    const match =
+      findBuiltinByPhrase(phrase, settingsRef.current) ??
+      findScenarioByPhrase(scenariosRef.current, phrase);
+    if (match) {
+      void revealWindow();
+      await executeScenario(match);
+      return true;
+    }
+
+    if (replyChatter(phrase)) return true;
+    return false;
+  }
+
+  function activateFromOrb() {
+    if (busyRef.current) return;
+    if (modeRef.current === "dictation") return;
+    void revealWindow();
+    setView("home");
+    wakeAck();
+    setStatus("Слушаю");
+    setCaption("");
+    setCaptionFinal("Дубина");
+    enterCommandMode();
   }
 
   async function hideWindow() {
@@ -191,8 +245,7 @@ function App() {
   }
 
   async function typeDictated(raw: string) {
-    const { woke, command } = extractWakeAndCommand(raw);
-    const phrase = (woke ? command : raw).trim();
+    const phrase = commandTextFromUtterance(raw);
     if (!phrase) return;
     if (isDictationStop(phrase)) {
       stopDictation();
@@ -256,13 +309,15 @@ function App() {
       await runScenario(scenario, ({ index, total }) => {
         setStatus(`Шаг ${index + 1}/${total}`);
       });
-      setListener("idle");
       setStatus("Готово");
+      enterCommandMode();
     } catch (e) {
       playActionSafe("error");
       setListener("error");
       setStatus(e instanceof Error ? e.message : "Ошибка");
-      window.setTimeout(() => setListener("idle"), 1600);
+      window.setTimeout(() => {
+        enterCommandMode();
+      }, 1200);
     } finally {
       busyRef.current = false;
       setCaption("");
@@ -283,23 +338,13 @@ function App() {
       if (modeRef.current === "command") {
         setCaptionFinal(text);
         setCaption("");
-        const { woke, command } = extractWakeAndCommand(text);
-        const phrase = (woke ? command : text).trim();
         wakeLatchRef.current = false;
+        const phrase = commandTextFromUtterance(text);
         if (!phrase) {
           return;
         }
-        if (tryDictationCommand(phrase)) return;
-        const match =
-          findBuiltinByPhrase(phrase, settingsRef.current) ??
-          findScenarioByPhrase(scenariosRef.current, phrase);
-        if (!match) {
-          if (replyChatter(phrase)) return;
-          failUnknown();
-          return;
-        }
-        void revealWindow();
-        await executeScenario(match);
+        const ok = await resolveSpoken(text);
+        if (!ok) failUnknown();
         return;
       }
 
@@ -313,39 +358,25 @@ function App() {
       setCaptionFinal(command || "Дубина");
 
       if (command) {
-        if (tryDictationCommand(command)) return;
-        const match =
-          findBuiltinByPhrase(command, settingsRef.current) ??
-          findScenarioByPhrase(scenariosRef.current, command);
-        if (match) {
-          if (!wakeLatchRef.current) {
-            void revealWindow();
-            setView("home");
-            setListener("wake");
-            playActionSafe("wake");
-            setStatus("А?");
-          }
-          wakeLatchRef.current = false;
-          await executeScenario(match);
-          return;
+        if (!wakeLatchRef.current) {
+          void revealWindow();
+          setView("home");
+          wakeAck();
+          setStatus("Слушаю");
         }
-        void revealWindow();
-        setView("home");
         wakeLatchRef.current = false;
-        if (replyChatter(command)) return;
-        failUnknown();
+        const ok = await resolveSpoken(text);
+        if (!ok) failUnknown();
         return;
       }
 
       if (!wakeLatchRef.current) {
         void revealWindow();
         setView("home");
-        setListener("wake");
-        playActionSafe("wake");
-        setStatus("А?");
+        wakeAck();
+        setStatus("Слушаю");
       }
       wakeLatchRef.current = false;
-
       enterCommandMode();
     },
     [executeScenario],
@@ -376,29 +407,35 @@ function App() {
       setCaptionFinal(command || "Дубина");
 
       if (command) {
-        if (matchDictationStart(command)) {
-          void startDictation(matchDictationStart(command)!.remainder);
+        const phrase = commandTextFromUtterance(text);
+        if (matchDictationStart(phrase)) {
+          void startDictation(matchDictationStart(phrase)!.remainder);
+          return;
+        }
+        if (isWeatherRequest(phrase)) {
+          void revealWindow();
+          wakeAck();
+          setStatus("Слушаю");
+          void handleWeather();
           return;
         }
         const match =
-          findBuiltinByPhrase(command, settingsRef.current) ??
-          findScenarioByPhrase(scenariosRef.current, command);
+          findBuiltinByPhrase(phrase, settingsRef.current) ??
+          findScenarioByPhrase(scenariosRef.current, phrase);
         if (match) {
           void revealWindow();
-          setListener("wake");
-          playActionSafe("wake");
-          setStatus("А?");
+          wakeAck();
+          setStatus("Слушаю");
           void executeScenario(match);
           return;
         }
         void revealWindow();
-        if (replyChatter(command)) return;
+        if (replyChatter(phrase)) return;
       }
 
       void revealWindow();
-      setListener("wake");
-      playActionSafe("wake");
-      setStatus("А?");
+      wakeAck();
+      setStatus("Слушаю");
       enterCommandMode();
     },
     [executeScenario],
@@ -590,10 +627,7 @@ function App() {
               transition={{ duration: 0.28 }}
             >
               <h1 className="home__title">Dubina</h1>
-              <p className="home__lead">
-                Скажи «Дубина» — и команду.
-              </p>
-              <Orb state={listener} />
+              <Orb state={listener} onActivate={activateFromOrb} />
               {status && <p className="home__status">{status}</p>}
 
               <div className="captions" aria-live="polite">
@@ -605,7 +639,7 @@ function App() {
                     <span className="captions__final">{captionFinal}</span>
                   ) : (
                     <span className="captions__placeholder">
-                      Скажи «Дубина»…
+                      Я тут...
                     </span>
                   )}
                 </div>

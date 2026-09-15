@@ -1,9 +1,11 @@
-import { normalizePhrase } from "../store/scenarios";
+import {
+  commandTextFromUtterance,
+  normalizePhrase,
+  phraseContained,
+} from "../voice/matchCommand";
 
 type ChatterRule = {
-  
   triggers: string[];
-  
   replies: string[];
 };
 
@@ -257,7 +259,6 @@ const RULES: ChatterRule[] = [
 function triggerMatches(needle: string, trigger: string): boolean {
   const t = normalizePhrase(trigger);
   if (!t || !needle) return false;
-  
   if (t.length <= 3) {
     if (needle === t) return true;
     return (
@@ -266,11 +267,11 @@ function triggerMatches(needle: string, trigger: string): boolean {
       needle.includes(` ${t} `)
     );
   }
-  return needle === t || needle.includes(t);
+  return phraseContained(needle, t);
 }
 
 export function findChatterReply(spoken: string): string | null {
-  const needle = normalizePhrase(spoken);
+  const needle = commandTextFromUtterance(spoken);
   if (!needle) return null;
 
   let bestLen = -1;

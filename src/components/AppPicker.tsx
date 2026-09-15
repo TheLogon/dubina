@@ -9,10 +9,41 @@ export type InstalledApp = {
 
 type Props = {
   value: string;
+  displayName?: string;
   onChange: (app: InstalledApp) => void;
 };
 
-export function AppPicker({ value, onChange }: Props) {
+function basename(path: string): string {
+  const cleaned = path.replace(/\\/g, "/");
+  const part = cleaned.split("/").filter(Boolean).pop() ?? path;
+  return part.replace(/\.exe$/i, "") || path;
+}
+
+function looksMojibake(s: string): boolean {
+  return /[ÐÑÃÂ]/.test(s) || (s.match(/[äåæø]/g) ?? []).length >= 2;
+}
+
+function friendlyFromPath(path: string): string {
+  const stem = basename(path).toLowerCase().replace(/\s+/g, "");
+  if (stem.includes("yandexmusic") || stem.includes("yamusic")) return "Яндекс Музыка";
+  if (stem === "spotify") return "Spotify";
+  if (stem === "chrome") return "Google Chrome";
+  if (stem === "telegram") return "Telegram";
+  return basename(path);
+}
+
+function displayLabel(app: InstalledApp | undefined, value: string, displayName?: string): string {
+  const candidates = [app?.name, displayName, value ? friendlyFromPath(value) : ""].filter(
+    Boolean,
+  ) as string[];
+  for (const c of candidates) {
+    if (c && !looksMojibake(c) && !c.includes("\\") && !c.includes("/")) return c;
+  }
+  if (value) return friendlyFromPath(value);
+  return "Выбери программу…";
+}
+
+export function AppPicker({ value, displayName, onChange }: Props) {
   const [apps, setApps] = useState<InstalledApp[]>([]);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -38,7 +69,9 @@ export function AppPicker({ value, onChange }: Props) {
     void reload(false);
   }, []);
 
-  const selected = apps.find((a) => a.path === value || a.name === value);
+  const selected = apps.find(
+    (a) => a.path === value || a.path.toLowerCase() === value.toLowerCase(),
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -55,11 +88,20 @@ export function AppPicker({ value, onChange }: Props) {
     try {
       const app = await invoke<InstalledApp | null>("pick_app_file");
       if (!app) return;
+      const fixed = {
+        path: app.path,
+        name:
+          looksMojibake(app.name) || !app.name
+            ? friendlyFromPath(app.path)
+            : app.name,
+      };
       setApps((prev) => {
-        if (prev.some((a) => a.path === app.path)) return prev;
-        return [app, ...prev];
+        if (prev.some((a) => a.path.toLowerCase() === fixed.path.toLowerCase())) {
+          return prev;
+        }
+        return [fixed, ...prev];
       });
-      onChange(app);
+      onChange(fixed);
       setOpen(false);
       setQuery("");
     } catch (e) {
@@ -75,7 +117,7 @@ export function AppPicker({ value, onChange }: Props) {
         onClick={() => setOpen((v) => !v)}
       >
         <span className="cselect__value">
-          {selected?.name || (value ? value : "Выбери программу…")}
+          {displayLabel(selected, value, displayName)}
         </span>
         <span className="cselect__chev">▾</span>
       </button>
@@ -96,7 +138,11 @@ export function AppPicker({ value, onChange }: Props) {
               onChange={(e) => setQuery(e.target.value)}
             />
             <div className="app-picker__actions">
-              <button type="button" className="btn btn--chip" onClick={() => void pickFile()}>
+              <button
+                type="button"
+                className="btn btn--chip"
+                onClick={() => void pickFile()}
+              >
                 Указать файл…
               </button>
               <button
@@ -115,7 +161,9 @@ export function AppPicker({ value, onChange }: Props) {
                   <button
                     type="button"
                     className={
-                      value === app.path || value === app.name ? "is-active" : ""
+                      value.toLowerCase() === app.path.toLowerCase()
+                        ? "is-active"
+                        : ""
                     }
                     onClick={() => {
                       onChange(app);
@@ -123,7 +171,11 @@ export function AppPicker({ value, onChange }: Props) {
                       setQuery("");
                     }}
                   >
-                    <strong>{app.name}</strong>
+                    <strong>
+                      {looksMojibake(app.name)
+                        ? friendlyFromPath(app.path)
+                        : app.name}
+                    </strong>
                     <span>{app.path}</span>
                   </button>
                 </li>

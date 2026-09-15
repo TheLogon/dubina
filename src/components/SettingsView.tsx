@@ -161,12 +161,15 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
           <span>Плеер по умолчанию</span>
           <AppPicker
             value={settings.musicAppPath}
+            displayName={settings.musicAppName}
             onChange={(app) =>
               update({ musicAppPath: app.path, musicAppName: app.name })
             }
           />
-          {settings.musicAppName && (
-            <p className="muted">Выбрано: {settings.musicAppName}</p>
+          {settings.musicAppPath && (
+            <p className="muted" style={{ wordBreak: "break-all" }}>
+              {settings.musicAppPath}
+            </p>
           )}
         </div>
       </section>

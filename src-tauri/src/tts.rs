@@ -464,13 +464,12 @@ pub fn start_music_player(app_path: String) -> Result<(), String> {
     if is_shell {
         thread::sleep(Duration::from_millis(3500));
     } else {
-        let ok = wait_until_running(&name, Duration::from_secs(25));
+        let ok = wait_until_running(&name, Duration::from_secs(20));
         if !ok {
-            return Err(format!(
-                "Приложение «{name}» не запустилось вовремя. Проверь путь в настройках."
-            ));
+            thread::sleep(Duration::from_millis(2800));
+        } else {
+            thread::sleep(Duration::from_millis(2200));
         }
-        thread::sleep(Duration::from_millis(1200));
     }
 
     #[cfg(target_os = "macos")]
@@ -484,13 +483,26 @@ pub fn start_music_player(app_path: String) -> Result<(), String> {
         thread::sleep(Duration::from_millis(400));
     }
 
-    
-    if crate::media_key_inner("play_pause").is_err() {
-        #[cfg(target_os = "macos")]
-        {
-            let _ = Command::new("osascript")
-                .args(["-e", "tell application \"System Events\" to keystroke space"])
-                .status();
+    #[cfg(target_os = "windows")]
+    {
+        let _ = crate::windows_native::focus_exe(&name);
+        thread::sleep(Duration::from_millis(1500));
+        crate::windows_native::send_media_play_toggle();
+        thread::sleep(Duration::from_millis(1200));
+        let _ = crate::windows_native::focus_exe(&name);
+        thread::sleep(Duration::from_millis(400));
+        crate::windows_native::send_media_play();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if crate::media_key_inner("play_pause").is_err() {
+            #[cfg(target_os = "macos")]
+            {
+                let _ = Command::new("osascript")
+                    .args(["-e", "tell application \"System Events\" to keystroke space"])
+                    .status();
+            }
         }
     }
     Ok(())

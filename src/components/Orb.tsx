@@ -4,19 +4,21 @@ import type { ListenerState } from "../types/scenario";
 
 type Props = {
   state: ListenerState;
+  onActivate?: () => void;
 };
 
 const STATE_HINT: Record<ListenerState, string> = {
-  idle: "Скажи «Дубина»",
-  wake: "А?",
+  idle: "Скажи «Дубина» или нажми",
+  wake: "Слушаю",
   listening: "Слушаю…",
   running: "Выполняю…",
   error: "Не понял",
   dictation: "Диктовка…",
 };
 
-export function Orb({ state }: Props) {
+export function Orb({ state, onActivate }: Props) {
   const [pulse, setPulse] = useState(0);
+  const clickable = Boolean(onActivate) && state !== "dictation" && state !== "running";
 
   useEffect(() => {
     if (state !== "idle") return;
@@ -28,8 +30,15 @@ export function Orb({ state }: Props) {
 
   return (
     <div className="orb-wrap">
-      <motion.div
-        className={`orb orb--${state}`}
+      <motion.button
+        type="button"
+        className={`orb orb--${state}${clickable ? " orb--clickable" : ""}`}
+        aria-label="Слушать команду"
+        disabled={!clickable}
+        onClick={() => {
+          if (!clickable) return;
+          onActivate?.();
+        }}
         animate={{
           scale: active ? [1, 1.06, 1] : [1, 1.03, 1],
           boxShadow:
@@ -60,7 +69,7 @@ export function Orb({ state }: Props) {
       >
         <span className="orb__core" />
         <span className="orb__ring" />
-      </motion.div>
+      </motion.button>
       <motion.p
         className="orb__hint"
         key={state}

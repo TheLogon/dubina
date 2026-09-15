@@ -1,4 +1,8 @@
-import { normalizePhrase } from "../store/scenarios";
+import {
+  commandTextFromUtterance,
+  normalizePhrase,
+  phraseContained,
+} from "../voice/matchCommand";
 
 export const DICTATION_START_PHRASES = [
   "напиши текст",
@@ -26,15 +30,12 @@ export const DICTATION_STOP_PHRASES = [
   "достаточно",
 ];
 
-const START_TRIGGERS = DICTATION_START_PHRASES;
-const STOP_TRIGGERS = DICTATION_STOP_PHRASES;
-
 export function matchDictationStart(spoken: string): { remainder: string } | null {
-  const needle = normalizePhrase(spoken);
+  const needle = commandTextFromUtterance(spoken);
   if (!needle) return null;
 
   let best: { trigger: string; idx: number } | null = null;
-  for (const trigger of START_TRIGGERS) {
+  for (const trigger of DICTATION_START_PHRASES) {
     const t = normalizePhrase(trigger);
     const idx = needle.indexOf(t);
     if (idx < 0) continue;
@@ -49,10 +50,7 @@ export function matchDictationStart(spoken: string): { remainder: string } | nul
 }
 
 export function isDictationStop(spoken: string): boolean {
-  const needle = normalizePhrase(spoken);
+  const needle = commandTextFromUtterance(spoken);
   if (!needle) return false;
-  return STOP_TRIGGERS.some((s) => {
-    const t = normalizePhrase(s);
-    return needle === t || needle.endsWith(` ${t}`) || needle.startsWith(`${t} `);
-  });
+  return DICTATION_STOP_PHRASES.some((s) => phraseContained(needle, s));
 }

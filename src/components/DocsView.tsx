@@ -1,6 +1,11 @@
 import {
-  BUILTIN_SCENARIOS,
+  BROWSER_PHRASES,
   MUSIC_PHRASES,
+  NEXT_PHRASES,
+  PAUSE_PHRASES,
+  PREV_PHRASES,
+  RESUME_PHRASES,
+  WEATHER_PHRASES,
 } from "../commands/builtins";
 import { listChatterTopics } from "../commands/chatter";
 import {
@@ -44,7 +49,6 @@ function Section({ title, lead, example, phrases }: DocBlock) {
 }
 
 export function DocsView({ onBack }: Props) {
-  const mediaPhrases = BUILTIN_SCENARIOS.map((s) => s.phrase);
   const chatter = listChatterTopics();
 
   return (
@@ -53,7 +57,8 @@ export function DocsView({ onBack }: Props) {
         <div>
           <h2 className="panel__title">Документация</h2>
           <p className="panel__sub">
-            Все встроенные команды. Сначала обратись к Дубине, потом фраза.
+            Обращение «Дубина», затем команда. Можно говорить свободно — имя и
+            лишние слова отбрасываются.
           </p>
         </div>
         <button type="button" className="btn btn--ghost" onClick={onBack}>
@@ -64,28 +69,60 @@ export function DocsView({ onBack }: Props) {
       <div className="docs__body">
         <Section
           title="Пробуждение"
-          lead="Пока не услышит имя — команды не выполняются. Подходят все падежи."
-          example="«Дубина» · «Дубину» · «Дубине, включи музыку»"
+          lead="Пока не услышит имя — команды не выполняются. Подходят все падежи. После ответа можно говорить следующую команду без повторного «Дубина». Круг на главной тоже включает режим слушания."
+          example="«Дубина» · «Дубину» · «Дубина, включи музыку»"
           phrases={[...WAKE_FORMS_RU, "dubina"]}
+        />
+
+        <Section
+          title="Свободная речь"
+          lead="Не обязательно говорить только команду. Фраза может быть грязной — Дубина вытащит смысл."
+          example="«Дубина емае включи уже музыку» → включи музыку"
+          phrases={[
+            "дубина включи уже музыку",
+            "дубина скажи погоду",
+            "включи музыку пожалуйста",
+          ]}
         />
 
         <Section
           title="Музыка"
           lead="Откроет плеер из настроек, дождётся запуска и нажмёт play."
-          example="«Дубина, включи музыку»"
+          example="«Дубина вруби музон»"
           phrases={MUSIC_PHRASES}
         />
 
         <Section
-          title="Браузер и медиа"
-          lead="Управление браузером и системными медиа-клавишами."
-          phrases={mediaPhrases}
+          title="Пауза и продолжить"
+          lead="Системные медиа-клавиши: пауза / play для текущего плеера."
+          example="«Дубина поставь на паузу»"
+          phrases={[...PAUSE_PHRASES, ...RESUME_PHRASES]}
+        />
+
+        <Section
+          title="Треки"
+          lead="Следующий и предыдущий трек."
+          example="«Дубина включи следующую» · «Дубина следующий трек»"
+          phrases={[...NEXT_PHRASES, ...PREV_PHRASES]}
+        />
+
+        <Section
+          title="Погода"
+          lead="Скажет краткую погоду вслух. Если сеть недоступна — откроет Яндекс Погоду."
+          example="«Дубина скажи погоду»"
+          phrases={WEATHER_PHRASES}
+        />
+
+        <Section
+          title="Браузер"
+          lead="Открывает браузер по умолчанию."
+          phrases={BROWSER_PHRASES}
         />
 
         <Section
           title="Диктовка"
           lead="Пишет сказанное в активное поле (чат, мессенджер). Перед стартом кликни в поле ввода. На Mac нужен «Универсальный доступ»."
-          example="«Дубина, напиши текст» → говори → «стоп»"
+          example="«Дубина напиши текст» → говори → «стоп»"
           phrases={DICTATION_START_PHRASES}
         />
 
@@ -120,8 +157,8 @@ export function DocsView({ onBack }: Props) {
           <h3 className="docs__h">Свои сценарии</h3>
           <p className="docs__lead">
             Во вкладке «Сценарии» можно добавить фразу и шаги: открыть
-            программу, сайт, задержку, медиа. Они работают так же — после
-            обращения к Дубине.
+            программу, сайт, задержку, медиа. Фраза тоже ищется внутри свободной
+            речи после «Дубина».
           </p>
         </section>
       </div>

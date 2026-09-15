@@ -4,7 +4,7 @@ import { clampVolume, loadSettings } from "../store/settings";
 export type SoundAction = "wake" | "ok" | "error";
 
 const PHRASES: Record<SoundAction, string[]> = {
-  wake: ["А?", "Да"],
+  wake: ["А?", "Да", "Слушаю", "Ну", "Что?", "Говори", "Я тут"],
   ok: ["Ок", "Готово"],
   error: ["Не понял", "Повтори"],
 };

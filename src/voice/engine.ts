@@ -1,4 +1,4 @@
-import { normalizePhrase } from "../store/scenarios";
+import { normalizePhrase } from "./matchCommand";
 import { requestMicrophoneAccess } from "./micPermission";
 import { loadVoskCreateModel } from "./loadVosk";
 import { WAKE_WORDS } from "./wake";
