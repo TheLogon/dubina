@@ -133,39 +133,8 @@ fn system_tts_to_file(text: &str, out: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let out_path = out.to_string_lossy().replace('\'', "''");
-        let escaped = text.replace('\'', "''");
-        let ps = format!(
-            r#"
-Add-Type -AssemblyName System.Speech
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$s.Rate = 2
-$ru = $s.GetInstalledVoices() | Where-Object {{ $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ru*' }} | Select-Object -First 1
-if ($ru) {{ $s.SelectVoice($ru.VoiceInfo.Name) }}
-$s.SetOutputToWaveFile('{out_path}')
-$s.Speak('{escaped}')
-$s.Dispose()
-"#
-        );
-        let status = crate::winutil::powershell()
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-WindowStyle",
-                "Hidden",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &ps,
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|e| e.to_string())?;
-        if status.success() && out.exists() {
-            return Ok(());
-        }
-        return Err("SAPI wave failed".into());
+        let _ = (text, out);
+        return Err("web-tts".into());
     }
 
     #[cfg(target_os = "linux")]

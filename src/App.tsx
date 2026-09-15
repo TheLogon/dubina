@@ -56,6 +56,7 @@ function App() {
   const scenariosRef = useRef(scenarios);
   const listenerRef = useRef(listener);
   const modeRef = useRef<"idle" | "command" | "dictation">("idle");
+  const commandTimerRef = useRef<number | null>(null);
   const voiceRef = useRef<VoiceController | null>(null);
   const busyRef = useRef(false);
   const wakeLatchRef = useRef(false);
@@ -100,8 +101,7 @@ function App() {
     const reply = findChatterReply(phrase);
     if (!reply) return false;
     lastChatterRef.current = { at: Date.now(), phrase: key };
-    modeRef.current = "idle";
-    wakeLatchRef.current = false;
+    resetToIdle();
     setListener("idle");
     setStatus(reply);
     setCaption("");
@@ -110,12 +110,41 @@ function App() {
     return true;
   }
 
+  function clearCommandTimer() {
+    if (commandTimerRef.current !== null) {
+      window.clearTimeout(commandTimerRef.current);
+      commandTimerRef.current = null;
+    }
+  }
+
+  function enterCommandMode() {
+    modeRef.current = "command";
+    setListener("listening");
+    setStatus("Слушаю команду…");
+    setCaptionFinal("");
+    clearCommandTimer();
+    commandTimerRef.current = window.setTimeout(() => {
+      if (modeRef.current !== "command") return;
+      modeRef.current = "idle";
+      wakeLatchRef.current = false;
+      setListener("idle");
+      setStatus(null);
+      setCaption("");
+      setCaptionFinal("");
+    }, 12000);
+  }
+
+  function resetToIdle() {
+    clearCommandTimer();
+    modeRef.current = "idle";
+    wakeLatchRef.current = false;
+  }
+
   function failUnknown() {
     playActionSafe("error");
     setListener("error");
     setStatus("Не понял");
-    modeRef.current = "idle";
-    wakeLatchRef.current = false;
+    resetToIdle();
     setCaption("");
     setCaptionFinal("");
     window.setTimeout(() => setListener("idle"), 1200);
@@ -216,7 +245,9 @@ function App() {
 
   const executeScenario = useCallback(async (scenario: Scenario) => {
     busyRef.current = true;
+    clearCommandTimer();
     modeRef.current = "idle";
+    wakeLatchRef.current = false;
     setCaption("");
     setCaptionFinal("");
     setListener("running");
@@ -315,10 +346,7 @@ function App() {
       }
       wakeLatchRef.current = false;
 
-      modeRef.current = "command";
-      setListener("listening");
-      setStatus("Слушаю команду…");
-      setCaptionFinal("");
+      enterCommandMode();
     },
     [executeScenario],
   );
@@ -371,9 +399,7 @@ function App() {
       setListener("wake");
       playActionSafe("wake");
       setStatus("А?");
-      modeRef.current = "command";
-      setListener("listening");
-      setStatus("Слушаю команду…");
+      enterCommandMode();
     },
     [executeScenario],
   );

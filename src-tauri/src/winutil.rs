@@ -10,12 +10,6 @@ pub fn no_window(cmd: &mut Command) {
     let _ = cmd;
 }
 
-pub fn powershell() -> Command {
-    let mut cmd = Command::new("powershell");
-    no_window(&mut cmd);
-    cmd
-}
-
 pub fn cmd_exe() -> Command {
     let mut cmd = Command::new("cmd");
     no_window(&mut cmd);

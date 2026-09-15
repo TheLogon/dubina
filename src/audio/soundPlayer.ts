@@ -16,8 +16,6 @@ export function allTtsPhrases(): string[] {
 let speaking = false;
 let outputVolume = loadSettings().outputVolume;
 let cacheReady = false;
-let preferWebTts =
-  typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent);
 
 export function applyAudioOutputSettings(opts: {
   outputDeviceId?: string;
@@ -33,16 +31,7 @@ function pickRandom(list: string[]): string {
 }
 
 export async function warmTtsCache(): Promise<void> {
-  if (preferWebTts) {
-    cacheReady = true;
-    return;
-  }
-  try {
-    await invoke("tts_warm_cache", { phrases: allTtsPhrases() });
-    cacheReady = true;
-  } catch (e) {
-    console.warn("[dubina:tts] warm cache", e);
-  }
+  cacheReady = true;
 }
 
 export async function speak(text: string): Promise<void> {
@@ -50,14 +39,13 @@ export async function speak(text: string): Promise<void> {
   if (!t || speaking) return;
   speaking = true;
   try {
-    if (preferWebTts) {
-      await speakWeb(t);
-      return;
-    }
-    await invoke("tts_speak", { text: t, volume: outputVolume });
-  } catch {
-    preferWebTts = true;
     await speakWeb(t);
+  } catch {
+    try {
+      await invoke("tts_speak", { text: t, volume: outputVolume });
+    } catch {
+      
+    }
   } finally {
     speaking = false;
   }

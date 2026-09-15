@@ -17,6 +17,8 @@ use tauri_plugin_autostart::MacosLauncher;
 
 mod tts;
 mod winutil;
+#[cfg(windows)]
+mod windows_native;
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 struct InstalledApp {
@@ -100,38 +102,10 @@ fn list_installed_apps(refresh: Option<bool>) -> Result<Vec<InstalledApp>, Strin
 fn pick_app_file() -> Result<Option<InstalledApp>, String> {
     #[cfg(target_os = "windows")]
     {
-        let ps = r#"
-Add-Type -AssemblyName System.Windows.Forms
-$d = New-Object System.Windows.Forms.OpenFileDialog
-$d.Filter = 'Programs (*.exe)|*.exe|All files (*.*)|*.*'
-$d.Title = 'Выбери программу'
-if ($d.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { '' ; exit 0 }
-$name = [IO.Path]::GetFileNameWithoutExtension($d.FileName)
-@{ name = $name; path = $d.FileName } | ConvertTo-Json -Compress
-"#;
-        let output = crate::winutil::powershell()
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-WindowStyle",
-                "Hidden",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                ps,
-            ])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .map_err(|e| e.to_string())?;
-        let raw = String::from_utf8_lossy(&output.stdout);
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        let app: InstalledApp =
-            serde_json::from_str(trimmed).map_err(|e| e.to_string())?;
-        return Ok(Some(app));
+        return match crate::windows_native::pick_exe_file()? {
+            Some((name, path)) => Ok(Some(InstalledApp { name, path })),
+            None => Ok(None),
+        };
     }
 
     #[cfg(target_os = "macos")]
@@ -216,122 +190,10 @@ fn collect_macos_apps(dir: &Path, apps: &mut Vec<InstalledApp>) {
 
 #[cfg(target_os = "windows")]
 fn collect_windows_apps(apps: &mut Vec<InstalledApp>) {
-    push_windows_known_music(apps);
-
-    let ps = r#"
-$ErrorActionPreference = 'SilentlyContinue'
-$list = New-Object System.Collections.Generic.List[object]
-function Add-App([string]$name, [string]$path) {
-  if (-not $name -or -not $path) { return }
-  if ($name -match '(?i)^(uninstall|удалить|setup|install|update|updater|help|справка|readme)') { return }
-  $list.Add([pscustomobject]@{ name = $name; path = $path })
-}
-try {
-  Get-StartApps | ForEach-Object {
-    $id = [string]$_.AppID
-    if (-not $id) { return }
-    if ($id -match '(?i)(uninstall|update)') { return }
-    Add-App $_.Name ("shell:AppsFolder\" + $id)
-  }
-} catch {}
-$shell = New-Object -ComObject WScript.Shell
-$roots = @(
-  (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'),
-  (Join-Path $env:AppData 'Microsoft\Windows\Start Menu\Programs')
-)
-foreach ($root in $roots) {
-  if (-not (Test-Path -LiteralPath $root)) { continue }
-  Get-ChildItem -LiteralPath $root -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-    try {
-      $sc = $shell.CreateShortcut($_.FullName)
-      $target = [string]$sc.TargetPath
-      if ($target -and ($target -match '\.exe$') -and (Test-Path -LiteralPath $target)) {
-        if ($target -notmatch '(?i)\\(uninstall|update|crash|helper|setup)[^\\]*\.exe$') {
-          Add-App $_.BaseName $target
-        }
-      }
-    } catch {}
-  }
-}
-$lap = Join-Path $env:LOCALAPPDATA 'Programs'
-if (Test-Path -LiteralPath $lap) {
-  Get-ChildItem -LiteralPath $lap -Filter '*.exe' -Recurse -Depth 3 -ErrorAction SilentlyContinue | ForEach-Object {
-    if ($_.Name -notmatch '(?i)^(unins|update|crash|helper|setup)') {
-      Add-App $_.BaseName $_.FullName
-    }
-  }
-}
-$list | ConvertTo-Json -Compress -Depth 3
-"#;
-
-    let output = crate::winutil::powershell()
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            ps,
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
-
-    if let Ok(out) = output {
-        let raw = String::from_utf8_lossy(&out.stdout);
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            if let Ok(parsed) = serde_json::from_str::<Vec<InstalledApp>>(trimmed) {
-                apps.extend(parsed);
-            } else if let Ok(one) = serde_json::from_str::<InstalledApp>(trimmed) {
-                apps.push(one);
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn push_windows_known_music(apps: &mut Vec<InstalledApp>) {
-    let mut candidates: Vec<(&str, PathBuf)> = Vec::new();
-    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-        candidates.extend([
-            (
-                "Яндекс Музыка",
-                local.join(r"Programs\YandexMusic\YandexMusic.exe"),
-            ),
-            (
-                "Яндекс Музыка",
-                local.join(r"Yandex\YandexMusic\YandexMusic.exe"),
-            ),
-            (
-                "Яндекс Музыка",
-                local.join(r"Programs\Yandex Music\YandexMusic.exe"),
-            ),
-            ("Spotify", local.join(r"Spotify\Spotify.exe")),
-            (
-                "Spotify",
-                local.join(r"Microsoft\WindowsApps\Spotify.exe"),
-            ),
-        ]);
-    }
-    for key in ["ProgramFiles", "ProgramFiles(x86)"] {
-        if let Some(pf) = std::env::var_os(key).map(PathBuf::from) {
-            candidates.push((
-                "Яндекс Музыка",
-                pf.join(r"Yandex\YandexMusic\YandexMusic.exe"),
-            ));
-            candidates.push(("Spotify", pf.join(r"Spotify\Spotify.exe")));
-        }
-    }
-    for (name, path) in candidates {
-        if path.is_file() {
-            apps.push(InstalledApp {
-                name: name.into(),
-                path: path.to_string_lossy().to_string(),
-            });
-        }
+    let mut pairs = Vec::new();
+    crate::windows_native::collect_apps(&mut pairs);
+    for (name, path) in pairs {
+        apps.push(InstalledApp { name, path });
     }
 }
 
@@ -428,31 +290,7 @@ pub(crate) fn open_app_inner(name: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        if name.starts_with("shell:") || name.contains('!') {
-            let status = Command::new("explorer")
-                .arg(name)
-                .status()
-                .map_err(|e| e.to_string())?;
-            if status.success() {
-                return Ok(());
-            }
-            let status = crate::winutil::cmd_exe()
-                .args(["/C", "start", "", name])
-                .status()
-                .map_err(|e| e.to_string())?;
-            if status.success() {
-                return Ok(());
-            }
-            return Err(format!("Не удалось открыть: {name}"));
-        }
-        let status = crate::winutil::cmd_exe()
-            .args(["/C", "start", "", name])
-            .status()
-            .map_err(|e| e.to_string())?;
-        if !status.success() {
-            return Err(format!("Не удалось открыть: {name}"));
-        }
-        return Ok(());
+        return crate::windows_native::open_path_or_shell(name);
     }
 
     #[cfg(target_os = "linux")]
@@ -612,34 +450,7 @@ fn type_text_inner(text: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let b64 = base64_encode(text.as_bytes());
-        let ps = format!(
-            r#"
-$bytes = [Convert]::FromBase64String('{b64}')
-$text = [Text.Encoding]::UTF8.GetString($bytes)
-Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.Clipboard]::SetText($text)
-Start-Sleep -Milliseconds 80
-[System.Windows.Forms.SendKeys]::SendWait('^v')
-"#
-        );
-        let status = crate::winutil::powershell()
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                &ps,
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map_err(|e| e.to_string())?;
-        if !status.success() {
-            return Err("Не удалось вставить текст".into());
-        }
-        return Ok(());
+        return crate::windows_native::paste_text(text);
     }
 
     #[cfg(target_os = "linux")]
@@ -695,34 +506,6 @@ Start-Sleep -Milliseconds 80
     }
 }
 
-#[cfg(target_os = "windows")]
-fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let mut n = (chunk[0] as u32) << 16;
-        if chunk.len() > 1 {
-            n |= (chunk[1] as u32) << 8;
-        }
-        if chunk.len() > 2 {
-            n |= chunk[2] as u32;
-        }
-        out.push(TABLE[((n >> 18) & 63) as usize] as char);
-        out.push(TABLE[((n >> 12) & 63) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(TABLE[((n >> 6) & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(TABLE[(n & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
-}
-
 #[cfg(target_os = "macos")]
 fn post_media_key_macos(key: i64) -> Result<(), String> {
     use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
@@ -769,41 +552,7 @@ pub(crate) fn media_key_inner(action: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let vk: u8 = match action {
-            "play_pause" => 0xB3,
-            "next" => 0xB0,
-            "previous" => 0xB1,
-            _ => return Err(format!("Неизвестное медиа-действие: {action}")),
-        };
-        let ps = format!(
-            r#"
-Add-Type -TypeDefinition @"
-using System.Runtime.InteropServices;
-public class Media {{
-  [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);
-}}
-"@
-[Media]::keybd_event({vk}, 0, 0, 0)
-[Media]::keybd_event({vk}, 0, 2, 0)
-"#
-        );
-        let status = crate::winutil::powershell()
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                &ps,
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map_err(|e| e.to_string())?;
-        if !status.success() {
-            return Err("Не удалось отправить медиа-клавишу".into());
-        }
-        return Ok(());
+        return crate::windows_native::send_media_key(action);
     }
 
     #[cfg(target_os = "linux")]
