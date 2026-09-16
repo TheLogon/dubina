@@ -14,8 +14,13 @@ export function allTtsPhrases(): string[] {
 }
 
 let speaking = false;
+let muteUntil = 0;
 let outputVolume = loadSettings().outputVolume;
 let cacheReady = false;
+
+export function isSpeechMuted(): boolean {
+  return speaking || Date.now() < muteUntil;
+}
 
 export function applyAudioOutputSettings(opts: {
   outputDeviceId?: string;
@@ -38,6 +43,7 @@ export async function speak(text: string): Promise<void> {
   const t = text.trim();
   if (!t || speaking) return;
   speaking = true;
+  muteUntil = Date.now() + 30_000;
   try {
     await speakWeb(t);
   } catch {
@@ -48,6 +54,7 @@ export async function speak(text: string): Promise<void> {
     }
   } finally {
     speaking = false;
+    muteUntil = Date.now() + 550;
   }
 }
 

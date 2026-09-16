@@ -27,7 +27,7 @@ import {
   type Scenario,
 } from "./types/scenario";
 import { runScenario } from "./executor/runScenario";
-import { playActionSafe, warmTtsCache, speakSafe } from "./audio/soundPlayer";
+import { playActionSafe, warmTtsCache, speakSafe, isSpeechMuted } from "./audio/soundPlayer";
 import { loadSettings, type AppSettings } from "./store/settings";
 import { checkForAppUpdate } from "./updater";
 import { listen } from "@tauri-apps/api/event";
@@ -37,7 +37,7 @@ import {
   startVoiceController,
   type VoiceController,
 } from "./voice/engine";
-import { commandTextFromUtterance } from "./voice/matchCommand";
+import { commandTextFromUtterance, isLikelyTtsEcho } from "./voice/matchCommand";
 import "./styles/global.css";
 
 function App() {
@@ -126,13 +126,18 @@ function App() {
     clearCommandTimer();
     commandTimerRef.current = window.setTimeout(() => {
       if (modeRef.current !== "command") return;
-      modeRef.current = "idle";
-      wakeLatchRef.current = false;
-      setListener("idle");
-      setStatus(null);
-      setCaption("");
-      setCaptionFinal("");
+      exitListenMode();
     }, 25000);
+  }
+
+  function exitListenMode() {
+    clearCommandTimer();
+    modeRef.current = "idle";
+    wakeLatchRef.current = false;
+    setListener("idle");
+    setStatus(null);
+    setCaption("");
+    setCaptionFinal("");
   }
 
   function failUnknown() {
@@ -149,6 +154,31 @@ function App() {
   function wakeAck() {
     setListener("wake");
     playActionSafe("wake");
+    window.setTimeout(() => {
+      voiceRef.current?.keepAlive();
+    }, 700);
+  }
+
+  function toggleFromOrb() {
+    if (busyRef.current) return;
+    if (modeRef.current === "dictation") return;
+    if (
+      modeRef.current === "command" ||
+      listenerRef.current === "listening" ||
+      listenerRef.current === "wake" ||
+      listenerRef.current === "error"
+    ) {
+      exitListenMode();
+      setStatus("Стоп");
+      return;
+    }
+    void revealWindow();
+    setView("home");
+    wakeAck();
+    setStatus("Слушаю");
+    setCaption("");
+    setCaptionFinal("Дубина");
+    enterCommandMode();
   }
 
   async function handleWeather() {
@@ -169,7 +199,7 @@ function App() {
 
   async function resolveSpoken(raw: string): Promise<boolean> {
     const phrase = commandTextFromUtterance(raw);
-    if (!phrase) return false;
+    if (!phrase || isLikelyTtsEcho(phrase)) return false;
 
     if (tryDictationCommand(phrase)) return true;
 
@@ -190,18 +220,6 @@ function App() {
 
     if (replyChatter(phrase)) return true;
     return false;
-  }
-
-  function activateFromOrb() {
-    if (busyRef.current) return;
-    if (modeRef.current === "dictation") return;
-    void revealWindow();
-    setView("home");
-    wakeAck();
-    setStatus("Слушаю");
-    setCaption("");
-    setCaptionFinal("Дубина");
-    enterCommandMode();
   }
 
   async function hideWindow() {
@@ -328,6 +346,7 @@ function App() {
   const handleFinalUtterance = useCallback(
     async (text: string) => {
       if (busyRef.current) return;
+      if (isSpeechMuted() || isLikelyTtsEcho(text)) return;
       console.info("[dubina:stt]", text);
 
       if (modeRef.current === "dictation") {
@@ -340,7 +359,7 @@ function App() {
         setCaption("");
         wakeLatchRef.current = false;
         const phrase = commandTextFromUtterance(text);
-        if (!phrase) {
+        if (!phrase || isLikelyTtsEcho(phrase)) {
           return;
         }
         const ok = await resolveSpoken(text);
@@ -385,6 +404,7 @@ function App() {
   const handlePartialUtterance = useCallback(
     (text: string) => {
       if (busyRef.current) return;
+      if (isSpeechMuted()) return;
 
       if (modeRef.current === "dictation") {
         setCaption(text);
@@ -408,20 +428,21 @@ function App() {
 
       if (command) {
         const phrase = commandTextFromUtterance(text);
-        if (matchDictationStart(phrase)) {
+        if (phrase && matchDictationStart(phrase)) {
           void startDictation(matchDictationStart(phrase)!.remainder);
           return;
         }
-        if (isWeatherRequest(phrase)) {
+        if (phrase && isWeatherRequest(phrase)) {
           void revealWindow();
           wakeAck();
           setStatus("Слушаю");
           void handleWeather();
           return;
         }
-        const match =
-          findBuiltinByPhrase(phrase, settingsRef.current) ??
-          findScenarioByPhrase(scenariosRef.current, phrase);
+        const match = phrase
+          ? findBuiltinByPhrase(phrase, settingsRef.current) ??
+            findScenarioByPhrase(scenariosRef.current, phrase)
+          : undefined;
         if (match) {
           void revealWindow();
           wakeAck();
@@ -430,7 +451,7 @@ function App() {
           return;
         }
         void revealWindow();
-        if (replyChatter(phrase)) return;
+        if (phrase && replyChatter(phrase)) return;
       }
 
       void revealWindow();
@@ -627,7 +648,7 @@ function App() {
               transition={{ duration: 0.28 }}
             >
               <h1 className="home__title">Dubina</h1>
-              <Orb state={listener} onActivate={activateFromOrb} />
+              <Orb state={listener} onActivate={toggleFromOrb} />
               {status && <p className="home__status">{status}</p>}
 
               <div className="captions" aria-live="polite">

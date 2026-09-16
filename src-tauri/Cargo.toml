@@ -1,6 +1,6 @@
 [package]
 name = "dubina"
-version = "0.1.5"
+version = "0.1.6"
 description = "Dubina — голосовой запуск сценариев"
 authors = ["lgn"]
 edition = "2021"

@@ -9,10 +9,10 @@ type Props = {
 
 const STATE_HINT: Record<ListenerState, string> = {
   idle: "Скажи «Дубина» или нажми",
-  wake: "Слушаю",
-  listening: "Слушаю…",
+  wake: "Слушаю · нажми чтобы стоп",
+  listening: "Слушаю · нажми чтобы стоп",
   running: "Выполняю…",
-  error: "Не понял",
+  error: "Не понял · нажми чтобы стоп",
   dictation: "Диктовка…",
 };
 
@@ -33,7 +33,11 @@ export function Orb({ state, onActivate }: Props) {
       <motion.button
         type="button"
         className={`orb orb--${state}${clickable ? " orb--clickable" : ""}`}
-        aria-label="Слушать команду"
+        aria-label={
+          state === "listening" || state === "wake" || state === "error"
+            ? "Остановить слушание"
+            : "Слушать команду"
+        }
         disabled={!clickable}
         onClick={() => {
           if (!clickable) return;

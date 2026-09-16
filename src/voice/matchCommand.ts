@@ -116,6 +116,26 @@ export function pickBestPhraseMatch<T>(
 }
 
 export function commandTextFromUtterance(text: string): string {
-  const stripped = stripWakeWords(text);
-  return stripped || normalizePhrase(text);
+  return stripWakeWords(text);
+}
+
+export function isLikelyTtsEcho(text: string): boolean {
+  const n = normalizePhrase(text);
+  if (!n) return true;
+  const echoes = new Set([
+    "а",
+    "да",
+    "ну",
+    "что",
+    "слушаю",
+    "говори",
+    "я тут",
+    "ок",
+    "готово",
+    "не понял",
+    "повтори",
+  ]);
+  if (echoes.has(n)) return true;
+  const tokens = significantTokens(n);
+  return tokens.length === 0;
 }

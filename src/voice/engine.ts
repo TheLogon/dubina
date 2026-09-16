@@ -172,8 +172,13 @@ function startWebSpeech(
   kick();
   handlers.onStatus("Слушаю… скажи «Дубина»");
 
+  const keepAlive = () => {
+    if (stopped) return;
+    kick();
+  };
+
   return {
-    keepAlive: kick,
+    keepAlive,
     stop: () => {
       stopped = true;
       if (restartTimer) window.clearTimeout(restartTimer);
