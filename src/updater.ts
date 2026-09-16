@@ -20,7 +20,7 @@ export async function currentAppVersion(): Promise<string> {
 export async function checkForAppUpdate(opts?: {
   install?: boolean;
 }): Promise<UpdateCheckResult> {
-  const install = opts?.install ?? true;
+  const install = opts?.install ?? false;
   let current = "dev";
   try {
     current = await getVersion();
@@ -58,4 +58,8 @@ export async function checkForAppUpdate(opts?: {
           : "Не удалось проверить обновления";
     return { status: "error", message };
   }
+}
+
+export async function installAppUpdate(): Promise<UpdateCheckResult> {
+  return checkForAppUpdate({ install: true });
 }

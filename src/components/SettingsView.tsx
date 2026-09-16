@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import {
   enable as enableAutostart,
   disable as disableAutostart,
@@ -20,6 +19,7 @@ import { AppPicker } from "./AppPicker";
 import {
   checkForAppUpdate,
   currentAppVersion,
+  installAppUpdate,
 } from "../updater";
 
 type Props = {
@@ -33,11 +33,12 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
   const [outputs, setOutputs] = useState<AudioDeviceOption[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [autostartError, setAutostartError] = useState<string | null>(null);
-  const [ttsStatus, setTtsStatus] = useState("…");
-  const [ttsDir, setTtsDir] = useState("");
   const [appVersion, setAppVersion] = useState("…");
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [pendingUpdateVersion, setPendingUpdateVersion] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     void (async () => {
@@ -71,26 +72,27 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
   }, []);
 
   useEffect(() => {
-    void refreshTts();
     void currentAppVersion().then(setAppVersion);
   }, []);
 
   async function runUpdateCheck() {
     setUpdateBusy(true);
+    setPendingUpdateVersion(null);
     setUpdateStatus("Проверяю обновления…");
-    const result = await checkForAppUpdate({ install: true });
+    const result = await checkForAppUpdate({ install: false });
     switch (result.status) {
       case "up-to-date":
         setUpdateStatus(`Уже последняя версия (${result.version})`);
         break;
       case "available":
-        setUpdateStatus(`Доступна ${result.version}`);
+        setPendingUpdateVersion(result.version);
+        setUpdateStatus(`Доступна версия ${result.version}`);
         break;
       case "updating":
         setUpdateStatus(`Ставлю ${result.version}…`);
         break;
       case "dev":
-        setUpdateStatus(result.message);
+        setUpdateStatus("Обновления доступны только в установленной версии");
         break;
       case "error":
         setUpdateStatus(result.message);
@@ -99,17 +101,34 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
     setUpdateBusy(false);
   }
 
-  async function refreshTts() {
-    try {
-      const [status, dir] = await Promise.all([
-        invoke<string>("tts_status"),
-        invoke<string>("tts_dir"),
-      ]);
-      setTtsStatus(status);
-      setTtsDir(dir);
-    } catch {
-      setTtsStatus("TTS недоступен вне приложения Tauri");
+  async function runUpdateInstall() {
+    setUpdateBusy(true);
+    setUpdateStatus(
+      pendingUpdateVersion
+        ? `Обновляю до ${pendingUpdateVersion}…`
+        : "Обновляю…",
+    );
+    const result = await installAppUpdate();
+    switch (result.status) {
+      case "up-to-date":
+        setPendingUpdateVersion(null);
+        setUpdateStatus(`Уже последняя версия (${result.version})`);
+        break;
+      case "updating":
+        setUpdateStatus(`Ставлю ${result.version}…`);
+        break;
+      case "available":
+        setPendingUpdateVersion(result.version);
+        setUpdateStatus(`Доступна версия ${result.version}`);
+        break;
+      case "dev":
+        setUpdateStatus("Обновления доступны только в установленной версии");
+        break;
+      case "error":
+        setUpdateStatus(result.message);
+        break;
     }
+    setUpdateBusy(false);
   }
 
   function update(patch: Partial<AppSettings>) {
@@ -119,6 +138,8 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
       applyAudioOutputSettings({
         outputDeviceId: next.outputDeviceId,
         outputVolume: next.outputVolume,
+        wakeVoiceEnabled: next.wakeVoiceEnabled,
+        doneVoiceEnabled: next.doneVoiceEnabled,
       });
       onSettingsChange?.(next);
       return next;
@@ -143,7 +164,7 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
       <div className="panel__head">
         <div>
           <h2 className="panel__title">Настройки</h2>
-          <p className="panel__sub">Звук, музыка, трей и автозапуск</p>
+          <p className="panel__sub">Музыка, микрофон, голос и обновления</p>
         </div>
         <button type="button" className="btn btn--ghost" onClick={onBack}>
           Назад
@@ -153,12 +174,11 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
       <section className="settings-block">
         <h3>Музыка</h3>
         <p className="muted">
-          Команда «включи музыку» откроет выбранный плеер, дождётся запуска и
-          нажмёт Play. Если Яндекс Музыки нет в списке — «Указать файл…» или
-          поиск по «яндекс» / «yandex» (в т.ч. из Microsoft Store).
+          Какую программу открывать по команде «включи музыку». Выбери
+          Яндекс Музыку. Если ничего не выбрано, Дубина попробует найти её сама.
         </p>
         <div className="field field--settings">
-          <span>Плеер по умолчанию</span>
+          <span>Музыкальный плеер</span>
           <AppPicker
             value={settings.musicAppPath}
             displayName={settings.musicAppName}
@@ -166,34 +186,32 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
               update({ musicAppPath: app.path, musicAppName: app.name })
             }
           />
-          {settings.musicAppPath && (
-            <p className="muted" style={{ wordBreak: "break-all" }}>
-              {settings.musicAppPath}
-            </p>
-          )}
         </div>
       </section>
 
       <section className="settings-block">
-        <h3>Ввод и вывод</h3>
-        <p className="muted">Выбери микрофон, динамики и громкость ответов.</p>
+        <h3>Микрофон и звук</h3>
+        <p className="muted">
+          Выбери, через что Дубина тебя слышит и куда отвечает. Можно взять
+          микрофон iPhone, если он подключён к Mac.
+        </p>
 
         <CustomSelect
-          label="Микрофон (вход)"
+          label="Микрофон"
           value={settings.inputDeviceId}
           options={inputs.map((d) => ({ value: d.deviceId, label: d.label }))}
           onChange={(v) => update({ inputDeviceId: v })}
         />
 
         <CustomSelect
-          label="Динамики (выход)"
+          label="Динамики"
           value={settings.outputDeviceId}
           options={outputs.map((d) => ({ value: d.deviceId, label: d.label }))}
           onChange={(v) => update({ outputDeviceId: v })}
         />
 
         <VolumeSlider
-          label="Громкость вывода"
+          label="Громкость ответов"
           value={settings.outputVolume}
           onChange={(v) => update({ outputVolume: v })}
         />
@@ -202,56 +220,59 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
       </section>
 
       <section className="settings-block">
-        <h3>Голос Дубыны (TTS)</h3>
-        <p className="muted">
-          Ответы генерируются из текста (Piper или системный голос). Wav больше
-          не нужны.
-        </p>
-        <pre className="tts-status">{ttsStatus}</pre>
-        {ttsDir && (
-          <p className="muted">
-            Папка Piper: <code>{ttsDir}</code>
-          </p>
-        )}
-        <p className="muted">
-          Для Piper положи бинарник и русский `.onnx` из{" "}
-          <a
-            href="https://github.com/OHF-Voice/piper1-gpl"
-            target="_blank"
-            rel="noreferrer"
-          >
-            piper1-gpl
-          </a>
-          .
-        </p>
+        <h3>Управление голосом</h3>
+        <p className="muted">Как Дубина отвечает голосом.</p>
+
+        <div className="toggle-row">
+          <div>
+            <strong>Отвечать голосом на «Дубина»</strong>
+            <p className="muted">
+              Если выключено — вместо «А?» будет короткий звук.
+            </p>
+          </div>
+          <Switch
+            checked={settings.wakeVoiceEnabled}
+            onChange={(v) => update({ wakeVoiceEnabled: v })}
+            ariaLabel="Отвечать голосом на Дубина"
+          />
+        </div>
+
+        <div className="toggle-row">
+          <div>
+            <strong>Говорить после команды</strong>
+            <p className="muted">
+              Короткие фразы вроде «Готово» или «Выполнил», когда команда
+              сделана.
+            </p>
+          </div>
+          <Switch
+            checked={settings.doneVoiceEnabled}
+            onChange={(v) => update({ doneVoiceEnabled: v })}
+            ariaLabel="Говорить после команды"
+          />
+        </div>
+
         <div className="settings-actions">
           <button
             type="button"
             className="btn btn--chip"
             onClick={() => playActionSafe("wake")}
           >
-            Тест: А?
+            Проверить отзыв
           </button>
           <button
             type="button"
             className="btn btn--chip"
             onClick={() => playActionSafe("ok")}
           >
-            Тест: Готово
+            Проверить «Готово»
           </button>
           <button
             type="button"
             className="btn btn--chip"
             onClick={() => speakSafe("Включаю музыку")}
           >
-            Тест: фраза
-          </button>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={() => void refreshTts()}
-          >
-            Обновить статус
+            Проверить голос
           </button>
         </div>
       </section>
@@ -259,19 +280,30 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
       <section className="settings-block">
         <h3>Обновления</h3>
         <p className="muted">
-          Текущая версия: <code>{appVersion}</code>. При релизе на GitHub
-          приложение само подтянет обновление.
+          Сейчас установлена версия <code>{appVersion}</code>. Сначала можно
+          проверить, есть ли новая, и обновить только когда захочешь.
         </p>
         {updateStatus && <p className="tts-status">{updateStatus}</p>}
         <div className="settings-actions">
-          <button
-            type="button"
-            className="btn btn--chip"
-            disabled={updateBusy}
-            onClick={() => void runUpdateCheck()}
-          >
-            {updateBusy ? "Проверяю…" : "Проверить обновления"}
-          </button>
+          {pendingUpdateVersion ? (
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={updateBusy}
+              onClick={() => void runUpdateInstall()}
+            >
+              {updateBusy ? "Обновляю…" : `Обновить до ${pendingUpdateVersion}`}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--chip"
+              disabled={updateBusy}
+              onClick={() => void runUpdateCheck()}
+            >
+              {updateBusy ? "Проверяю…" : "Проверить обновления"}
+            </button>
+          )}
         </div>
       </section>
 
@@ -280,28 +312,28 @@ export function SettingsView({ onBack, onSettingsChange }: Props) {
 
         <div className="toggle-row">
           <div>
-            <strong>Закрывать программу в трей</strong>
+            <strong>Сворачивать в значок</strong>
             <p className="muted">
-              Крестик прячет в трей, Дубина продолжает слушать. Выключено —
-              полный выход (голос останавливается).
+              При закрытии окна Дубина остаётся в значке у часов и продолжает
+              слушать. Если выключить — программа полностью завершится.
             </p>
           </div>
           <Switch
             checked={settings.closeToTray}
             onChange={(v) => update({ closeToTray: v })}
-            ariaLabel="Закрывать программу в трей"
+            ariaLabel="Сворачивать в значок"
           />
         </div>
 
         <div className="toggle-row">
           <div>
-            <strong>Автозапуск при старте системы</strong>
-            <p className="muted">Запускать Дубину вместе с системой.</p>
+            <strong>Запускать вместе с системой</strong>
+            <p className="muted">Дубина откроется автоматически после включения компьютера.</p>
           </div>
           <Switch
             checked={settings.autostart}
             onChange={(v) => void toggleAutostart(v)}
-            ariaLabel="Автозапуск при старте системы"
+            ariaLabel="Запускать вместе с системой"
           />
         </div>
 

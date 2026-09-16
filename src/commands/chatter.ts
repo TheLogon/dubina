@@ -1,7 +1,7 @@
 import {
   commandTextFromUtterance,
+  isFocusedCommandUtterance,
   normalizePhrase,
-  phraseContained,
 } from "../voice/matchCommand";
 
 type ChatterRule = {
@@ -261,13 +261,10 @@ function triggerMatches(needle: string, trigger: string): boolean {
   if (!t || !needle) return false;
   if (t.length <= 3) {
     if (needle === t) return true;
-    return (
-      needle.startsWith(`${t} `) ||
-      needle.endsWith(` ${t}`) ||
-      needle.includes(` ${t} `)
-    );
+    const tokens = needle.split(/\s+/);
+    return tokens.length <= 2 && tokens.includes(t);
   }
-  return phraseContained(needle, t);
+  return isFocusedCommandUtterance(needle, t);
 }
 
 export function findChatterReply(spoken: string): string | null {

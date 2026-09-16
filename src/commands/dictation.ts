@@ -1,5 +1,6 @@
 import {
   commandTextFromUtterance,
+  isStopPhrase,
   normalizePhrase,
   phraseContained,
 } from "../voice/matchCommand";
@@ -27,6 +28,8 @@ export const DICTATION_STOP_PHRASES = [
   "готово",
   "хватит",
   "стоп",
+  "старт",
+  "stop",
   "достаточно",
 ];
 
@@ -50,6 +53,7 @@ export function matchDictationStart(spoken: string): { remainder: string } | nul
 }
 
 export function isDictationStop(spoken: string): boolean {
+  if (isStopPhrase(spoken)) return true;
   const needle = commandTextFromUtterance(spoken);
   if (!needle) return false;
   return DICTATION_STOP_PHRASES.some((s) => phraseContained(needle, s));

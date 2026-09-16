@@ -8,15 +8,27 @@ export type RunProgress = {
   step: ScenarioStep;
 };
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export type RunSignal = {
+  cancelled: boolean;
+};
+
+async function sleep(ms: number, signal?: RunSignal): Promise<void> {
+  const step = 100;
+  let left = ms;
+  while (left > 0) {
+    if (signal?.cancelled) return;
+    const chunk = Math.min(step, left);
+    await new Promise((resolve) => setTimeout(resolve, chunk));
+    left -= chunk;
+  }
 }
 
-async function runStep(step: ScenarioStep): Promise<void> {
+async function runStep(step: ScenarioStep, signal?: RunSignal): Promise<void> {
+  if (signal?.cancelled) return;
   switch (step.type) {
     case "delay": {
       const sec = Math.max(0, step.seconds ?? 1);
-      await sleep(sec * 1000);
+      await sleep(sec * 1000, signal);
       break;
     }
     case "open_url": {
@@ -59,14 +71,14 @@ async function runStep(step: ScenarioStep): Promise<void> {
 export async function runScenario(
   scenario: Scenario,
   onProgress?: (p: RunProgress) => void,
-  signal?: { cancelled: boolean },
+  signal?: RunSignal,
 ): Promise<void> {
   const total = scenario.steps.length;
   for (let i = 0; i < total; i++) {
     if (signal?.cancelled) return;
     const step = scenario.steps[i];
     onProgress?.({ index: i, total, step });
-    await runStep(step);
+    await runStep(step, signal);
   }
   if (signal?.cancelled) return;
   playActionSafe("ok");

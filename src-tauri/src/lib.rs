@@ -18,6 +18,8 @@ use tauri_plugin_autostart::MacosLauncher;
 
 mod tts;
 mod winutil;
+#[cfg(target_os = "macos")]
+mod yandex_cdp;
 #[cfg(windows)]
 mod windows_native;
 
@@ -309,7 +311,7 @@ pub(crate) fn open_app_inner(name: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn find_macos_app_fuzzy(query: &str) -> Option<PathBuf> {
+pub(crate) fn find_macos_app_fuzzy(query: &str) -> Option<PathBuf> {
     let q = query.to_lowercase().replace('ё', "е");
     let mut apps = Vec::new();
     for dir in [
@@ -537,6 +539,217 @@ fn post_media_key_macos(key: i64) -> Result<(), String> {
         CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&cg));
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn media_remote_play() -> bool {
+    use std::ffi::c_void;
+
+    #[link(name = "MediaRemote", kind = "framework")]
+    unsafe extern "C" {
+        fn MRMediaRemoteSendCommand(command: u32, user_info: *const c_void) -> u8;
+    }
+
+    const MR_PLAY: u32 = 0;
+    unsafe { MRMediaRemoteSendCommand(MR_PLAY, std::ptr::null()) != 0 }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn yandex_press_play(process_name: &str) -> Result<(), String> {
+    let name = process_name.replace('"', "");
+    if !ensure_accessibility_permission() {
+        let _ = media_remote_play();
+        let _ = media_key_inner("play_pause");
+        return Err(
+            "Чтобы включать музыку в фоне, добавь в Универсальный доступ: Cursor (или Terminal) и target/debug/dubina"
+                .into(),
+        );
+    }
+
+    let silent = format!(
+        r#"tell application "System Events"
+  if not (exists process "{name}") then return "no-process"
+  tell process "{name}"
+    set played to false
+    try
+      click menu item "Слушать" of menu 1 of menu bar item "Воспроизведение" of menu bar 1
+      set played to true
+    end try
+    if played is false then
+      try
+        click menu item "Play" of menu 1 of menu bar item "Playback" of menu bar 1
+        set played to true
+      end try
+    end if
+    if played is false then
+      try
+        click menu item "Play/Pause" of menu 1 of menu bar item "Playback" of menu bar 1
+        set played to true
+      end try
+    end if
+    if played is false then
+      try
+        click menu item "Пауза" of menu 1 of menu bar item "Воспроизведение" of menu bar 1
+        set played to true
+      end try
+    end if
+    if played is false then
+      try
+        repeat with w in windows
+          try
+            set bs to every UI element of w whose (role is "AXButton" or role is "AXCheckBox")
+            repeat with b in bs
+              set d to ""
+              set n to ""
+              try
+                set d to description of b as text
+              end try
+              try
+                set n to name of b as text
+              end try
+              set blob to d & " " & n
+              if blob contains "Play" or blob contains "Слушать" or blob contains "play" or blob contains "Воспроиз" then
+                click b
+                set played to true
+                exit repeat
+              end if
+            end repeat
+          end try
+          if played then exit repeat
+        end repeat
+      end try
+    end if
+    if played then
+      return "ok"
+    else
+      return "miss"
+    end if
+  end tell
+end tell"#
+    );
+
+    let out = Command::new("osascript")
+        .args(["-e", &silent])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text == "ok" {
+        return Ok(());
+    }
+
+    let _ = media_remote_play();
+
+    let steal = format!(
+        r#"tell application "System Events"
+  if not (exists process "{name}") then return
+  set prevName to ""
+  try
+    set prevName to name of first application process whose frontmost is true
+  end try
+  set frontmost of process "{name}" to true
+  delay 0.15
+  key code 49
+  delay 0.1
+  if prevName is not "" and prevName is not "{name}" then
+    try
+      set frontmost of process prevName to true
+    end try
+  end if
+end tell"#
+    );
+    let _ = Command::new("osascript").args(["-e", &steal]).status();
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn post_keycode_macos(key_code: u16) -> Result<(), String> {
+    use objc2_core_graphics::{CGEvent, CGEventTapLocation};
+
+    for down in [true, false] {
+        let Some(ev) = CGEvent::new_keyboard_event(None, key_code, down) else {
+            return Err("Не удалось создать клавишу".into());
+        };
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&ev));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+mod ax {
+    use std::ffi::c_void;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        fn AXIsProcessTrusted() -> u8;
+        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> u8;
+        static kAXTrustedCheckOptionPrompt: *const c_void;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFDictionaryCreate(
+            allocator: *const c_void,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: isize,
+            key_callbacks: *const c_void,
+            value_callbacks: *const c_void,
+        ) -> *const c_void;
+        fn CFRelease(cf: *const c_void);
+        static kCFBooleanTrue: *const c_void;
+        static kCFTypeDictionaryKeyCallBacks: c_void;
+        static kCFTypeDictionaryValueCallBacks: c_void;
+    }
+
+    pub fn is_trusted() -> bool {
+        unsafe { AXIsProcessTrusted() != 0 }
+    }
+
+    pub fn request_with_prompt() -> bool {
+        unsafe {
+            let key = kAXTrustedCheckOptionPrompt;
+            let value = kCFBooleanTrue;
+            let keys = [key];
+            let values = [value];
+            let dict = CFDictionaryCreate(
+                std::ptr::null(),
+                keys.as_ptr(),
+                values.as_ptr(),
+                1,
+                &kCFTypeDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks,
+            );
+            let ok = AXIsProcessTrustedWithOptions(dict) != 0;
+            if !dict.is_null() {
+                CFRelease(dict);
+            }
+            ok
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn ax_is_trusted() -> bool {
+    ax::is_trusted()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn ensure_accessibility_permission() -> bool {
+    if ax::is_trusted() {
+        return true;
+    }
+    let _ = ax::request_with_prompt();
+    if ax::is_trusted() {
+        return true;
+    }
+    let urls = [
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility",
+    ];
+    for url in urls {
+        let _ = std::process::Command::new("open").arg(url).status();
+    }
+    false
 }
 
 pub(crate) fn media_key_inner(action: &str) -> Result<(), String> {

@@ -24,14 +24,37 @@ export async function requestMicrophoneAccess(
     throw new Error("Микрофон недоступен в этой среде");
   }
 
-  const audio: MediaTrackConstraints = {
+  const base: MediaTrackConstraints = {
+    channelCount: 1,
     echoCancellation: true,
     noiseSuppression: true,
-    channelCount: 1,
+    autoGainControl: true,
   };
+
+  const attempts: Array<MediaTrackConstraints | boolean> = [];
   if (inputDeviceId) {
-    audio.deviceId = { exact: inputDeviceId };
+    attempts.push({ ...base, deviceId: { ideal: inputDeviceId } });
+    attempts.push({
+      channelCount: 1,
+      deviceId: { ideal: inputDeviceId },
+    });
+    attempts.push({ deviceId: { ideal: inputDeviceId } });
+    attempts.push({ ...base, deviceId: { exact: inputDeviceId } });
+  }
+  attempts.push(base);
+  attempts.push({ channelCount: 1 });
+  attempts.push(true);
+
+  let lastError: unknown;
+  for (const audio of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio, video: false });
+    } catch (e) {
+      lastError = e;
+    }
   }
 
-  return navigator.mediaDevices.getUserMedia({ audio, video: false });
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Не удалось получить микрофон");
 }

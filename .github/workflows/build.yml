@@ -21,18 +21,9 @@ jobs:
           - platform: windows-latest
             args: ""
             name: windows
-          - platform: ubuntu-22.04
-            args: ""
-            name: linux
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: install linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: setup node
         uses: actions/setup-node@v4
@@ -65,7 +56,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: Dubina v__VERSION__
-          releaseBody: Сборки Linux, MacOS и Windows.
+          releaseBody: Сборки MacOS и Windows.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

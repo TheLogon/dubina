@@ -3,6 +3,17 @@ import { requestMicrophoneAccess } from "./micPermission";
 import { loadVoskCreateModel } from "./loadVosk";
 import { WAKE_WORDS } from "./wake";
 
+function looksLikeWakeToken(tok: string): boolean {
+  if (!tok) return false;
+  if (WAKE_WORDS.includes(tok)) return true;
+  if (tok.length >= 5 && /[кгтд]абина$/.test(tok)) return true;
+  if (tok.length >= 4 && /^(?:д|т|р|л|у|к|г)?убин[аыуеой]*$/.test(tok)) return true;
+  if (tok.length >= 4 && /^(?:у)?бейна$/.test(tok)) return true;
+  if (tok.length >= 4 && /^бин[аыуеой]*$/.test(tok)) return true;
+  if (tok.length >= 5 && /бина$/.test(tok)) return true;
+  return false;
+}
+
 export function extractWakeAndCommand(text: string): {
   woke: boolean;
   command: string;
@@ -11,11 +22,42 @@ export function extractWakeAndCommand(text: string): {
   const normalized = normalizePhrase(text);
   if (!normalized) return { woke: false, command: "", normalized };
 
-  for (const wake of WAKE_WORDS) {
+  const wakes = [...WAKE_WORDS].sort((a, b) => b.length - a.length);
+  for (const wake of wakes) {
     const idx = normalized.indexOf(wake);
-    if (idx >= 0) {
-      const command = normalized.slice(idx + wake.length).trim();
+    if (idx < 0) continue;
+    if (idx > 0 && normalized[idx - 1] !== " ") continue;
+    const after = idx + wake.length;
+    if (after < normalized.length && normalized[after] !== " ") continue;
+    const command = normalized.slice(after).trim();
+    return { woke: true, command, normalized };
+  }
+
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i] ?? "";
+    const next = tokens[i + 1] ?? "";
+    const pairSpace = next ? `${tok} ${next}` : "";
+    const pairJoin = next ? `${tok}${next}` : "";
+
+    if (
+      looksLikeWakeToken(tok) ||
+      (pairSpace && wakes.includes(pairSpace)) ||
+      (pairJoin && looksLikeWakeToken(pairJoin))
+    ) {
+      const skip = pairSpace && (wakes.includes(pairSpace) || looksLikeWakeToken(pairJoin)) ? 2 : 1;
+      const command = tokens.slice(i + skip).join(" ").trim();
       return { woke: true, command, normalized };
+    }
+
+    for (const wake of wakes) {
+      if (
+        tok === wake ||
+        (tok.length >= 5 && (wake.startsWith(tok) || tok.startsWith(wake)))
+      ) {
+        const command = tokens.slice(i + 1).join(" ").trim();
+        return { woke: true, command, normalized };
+      }
     }
   }
 
@@ -96,28 +138,36 @@ export async function startVoiceController(
     throw new MicPermissionError(msg);
   }
 
+  const stopMic = () => {
+    try {
+      mediaStream.getTracks().forEach((t) => t.stop());
+    } catch {
+      
+    }
+  };
+
+  handlers.onStatus("Микрофон ок. Запуск распознавания…");
+  try {
+    const vosk = await startVosk(mediaStream, handlers);
+    handlers.onStatus("Слушаю вас");
+    return vosk;
+  } catch (e) {
+    console.warn("[dubina:vosk] fallback to web speech", e);
+    stopMic();
+  }
+
   const Rec = getSpeechRecognitionCtor();
   if (Rec) {
-    handlers.onStatus("Слушаю… скажи «Дубина»");
+    handlers.onStatus("Слушаю вас");
     try {
-      const controller = startWebSpeech(Rec, handlers);
-      mediaStream.getTracks().forEach((t) => t.stop());
-      return controller;
-    } catch (e) {
-      console.warn("[dubina:speech] web speech failed, vosk fallback", e);
+      return startWebSpeech(Rec, handlers);
+    } catch (err) {
+      console.warn("[dubina:speech] web speech failed", err);
     }
   }
 
-  handlers.onStatus("Микрофон ок. Загрузка Vosk…");
-  try {
-    return await startVosk(mediaStream, handlers);
-  } catch (e) {
-    mediaStream.getTracks().forEach((t) => t.stop());
-    const detail = e instanceof Error ? e.message : String(e);
-    console.error("[dubina:vosk]", e);
-    handlers.onError(`Не удалось запустить распознавание: ${detail}`);
-    throw e;
-  }
+  handlers.onError("Не удалось запустить распознавание");
+  throw new Error("Не удалось запустить распознавание");
 }
 
 function startWebSpeech(
@@ -150,8 +200,11 @@ function startWebSpeech(
     const err = ev.error ?? "";
     if (err === "no-speech" || err === "aborted") return;
     if (err === "not-allowed") {
-      handlers.onError("Нет доступа к распознаванию речи Windows");
+      handlers.onError("Нет доступа к распознаванию речи");
+      return;
     }
+    if (restartTimer) window.clearTimeout(restartTimer);
+    restartTimer = window.setTimeout(kick, 320);
   };
 
   const kick = () => {
@@ -159,7 +212,20 @@ function startWebSpeech(
     try {
       rec.start();
     } catch {
-      
+      try {
+        rec.stop();
+      } catch {
+        
+      }
+      if (restartTimer) window.clearTimeout(restartTimer);
+      restartTimer = window.setTimeout(() => {
+        if (stopped) return;
+        try {
+          rec.start();
+        } catch {
+          
+        }
+      }, 250);
     }
   };
 
@@ -170,15 +236,12 @@ function startWebSpeech(
   };
 
   kick();
-  handlers.onStatus("Слушаю… скажи «Дубина»");
-
-  const keepAlive = () => {
-    if (stopped) return;
-    kick();
-  };
 
   return {
-    keepAlive,
+    keepAlive: () => {
+      if (stopped) return;
+      kick();
+    },
     stop: () => {
       stopped = true;
       if (restartTimer) window.clearTimeout(restartTimer);
@@ -196,7 +259,6 @@ async function startVosk(
   mediaStream: MediaStream,
   handlers: SpeechEngineHandlers,
 ): Promise<VoiceController> {
-  const sampleRate = 16000;
   const modelUrl = new URL(MODEL_PATH, window.location.origin).href;
   handlers.onStatus("Загрузка модели распознавания…");
 
@@ -211,39 +273,71 @@ async function startVosk(
   const createModel = await loadVoskCreateModel();
   const model = await createModel(modelUrl);
 
-  const wakeGrammar = JSON.stringify([
-    ...WAKE_WORDS,
-    ...WAKE_WORDS.map((w) => w.charAt(0).toUpperCase() + w.slice(1)),
-    "Дубина",
-    "Дубину",
-    "Дубине",
-  ]);
-
-  let recognizer = new model.KaldiRecognizer(sampleRate, wakeGrammar);
-
-  const bind = () => {
-    recognizer.on("partialresult", (message) => {
-      const partial = message.result?.partial?.trim();
-      if (partial) handlers.onPartial(partial);
-    });
-    recognizer.on("result", (message) => {
-      const text = message.result?.text?.trim();
-      if (text) handlers.onFinal(text);
-    });
-  };
-  bind();
-
-  const audioContext = new AudioContext({ sampleRate });
+  const audioContext = new AudioContext();
   if (audioContext.state === "suspended") await audioContext.resume();
+
+  const sampleRate = audioContext.sampleRate;
+  const recognizer = new model.KaldiRecognizer(sampleRate);
+
+  recognizer.on("partialresult", (message) => {
+    const partial = message.result?.partial?.trim();
+    if (partial) {
+      console.info("[dubina:vosk:partial]", partial);
+      handlers.onPartial(partial);
+    }
+  });
+  recognizer.on("result", (message) => {
+    const text = message.result?.text?.trim();
+    if (text) {
+      console.info("[dubina:vosk:final]", text);
+      handlers.onFinal(text);
+    }
+  });
 
   const source = audioContext.createMediaStreamSource(mediaStream);
   const processor = audioContext.createScriptProcessor(4096, 1, 1);
   let ready = true;
-  let fullMode = false;
+  let lastLevelLog = 0;
+  let boostBuf: AudioBuffer | null = null;
+
   processor.onaudioprocess = (event) => {
     if (!ready) return;
     try {
-      recognizer.acceptWaveform(event.inputBuffer);
+      const input = event.inputBuffer;
+      const channel = input.getChannelData(0);
+      let peak = 0;
+      for (let i = 0; i < channel.length; i++) {
+        const v = Math.abs(channel[i] ?? 0);
+        if (v > peak) peak = v;
+      }
+      const now = performance.now();
+      if (peak > 0.008 && now - lastLevelLog > 2000) {
+        lastLevelLog = now;
+        console.info("[dubina:vosk] mic level", peak.toFixed(3));
+      }
+
+      let feed: AudioBuffer = input;
+      if (peak > 0.0008 && peak < 0.22) {
+        const gain = Math.min(10, 0.35 / peak);
+        if (
+          !boostBuf ||
+          boostBuf.length !== channel.length ||
+          boostBuf.sampleRate !== input.sampleRate
+        ) {
+          boostBuf = audioContext.createBuffer(
+            1,
+            channel.length,
+            input.sampleRate,
+          );
+        }
+        const out = boostBuf.getChannelData(0);
+        for (let i = 0; i < channel.length; i++) {
+          const s = (channel[i] ?? 0) * gain;
+          out[i] = s > 1 ? 1 : s < -1 ? -1 : s;
+        }
+        feed = boostBuf;
+      }
+      recognizer.acceptWaveform(feed);
     } catch (err) {
       console.warn("[dubina:vosk] waveform", err);
     }
@@ -255,11 +349,14 @@ async function startVosk(
   processor.connect(mute);
   mute.connect(audioContext.destination);
 
-  handlers.onStatus("Слушаю… скажи «Дубина»");
-
   const keepAlive = () => {
     if (audioContext.state === "suspended") {
       void audioContext.resume();
+    }
+    for (const track of mediaStream.getAudioTracks()) {
+      if (track.readyState === "live" && track.muted) {
+        console.warn("[dubina:vosk] track muted", track.label);
+      }
     }
   };
 
@@ -268,29 +365,16 @@ async function startVosk(
   window.addEventListener("focus", onVis);
   const keepAliveTimer = window.setInterval(keepAlive, 4000);
 
-  const switchFull = () => {
-    if (fullMode) return;
-    fullMode = true;
-    try {
-      recognizer = new model.KaldiRecognizer(sampleRate);
-      bind();
-    } catch (e) {
-      console.warn("[dubina:vosk] full mode", e);
-    }
-  };
-
-  const originalOnPartial = handlers.onPartial;
-  const originalOnFinal = handlers.onFinal;
-  handlers.onPartial = (t) => {
-    const { woke } = extractWakeAndCommand(t);
-    if (woke) switchFull();
-    originalOnPartial(t);
-  };
-  handlers.onFinal = (t) => {
-    const { woke } = extractWakeAndCommand(t);
-    if (woke) switchFull();
-    originalOnFinal(t);
-  };
+  keepAlive();
+  console.info("[dubina:vosk] ready", {
+    sampleRate,
+    tracks: mediaStream.getAudioTracks().map((t) => ({
+      label: t.label,
+      enabled: t.enabled,
+      muted: t.muted,
+      readyState: t.readyState,
+    })),
+  });
 
   return {
     keepAlive,

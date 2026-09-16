@@ -2,8 +2,8 @@ import type { Scenario } from "../types/scenario";
 import type { AppSettings } from "../store/settings";
 import {
   commandTextFromUtterance,
+  isFocusedCommandUtterance,
   normalizePhrase,
-  phraseContained,
 } from "../voice/matchCommand";
 
 function builtin(
@@ -26,6 +26,14 @@ export const MUSIC_PHRASES = [
   "включи музыку",
   "вруби музыку",
   "запусти музыку",
+  "открой музыку",
+  "включить музыку",
+  "запустить музыку",
+  "включи музыка",
+  "вруби музыка",
+  "запусти музыка",
+  "ключи музыку",
+  "ключи музыка",
   "включи музон",
   "вруби музон",
   "запусти музон",
@@ -45,9 +53,41 @@ export const MUSIC_PHRASES = [
   "play music",
   "start music",
   "музыка",
+  "музыку",
+  "музыки",
   "музон",
   "яндекс музыка",
 ];
+
+function looksLikeMusicStart(text: string): boolean {
+  if (firstMatchingPhrase(text, MUSIC_PHRASES)) return true;
+  const n = normalizePhrase(text);
+  if (!n) return false;
+  if (
+    /^(?:включи|вруби|запусти|ключи|включить|запустить)$/.test(n)
+  ) {
+    return true;
+  }
+  if (/^(?:музык[а-яё]*|музон[а-яё]*|spotify|спотиф[а-яё]*)$/.test(n)) {
+    return true;
+  }
+  if (/^(?:старт|start|play|стоп|stop)$/.test(n)) {
+    return false;
+  }
+  const hasMusic =
+    /(?:^|\s)(?:музык[а-яё]*|музон[а-яё]*|spotify|спотиф[а-яё]*)(?:\s|$)/.test(
+      n,
+    ) || (/яндекс/.test(n) && /музык/.test(n));
+  const hasStart =
+    /(?:^|\s)(?:включи|вруби|запусти|открой|включить|запустить)(?:\s|$)/.test(
+      n,
+    );
+  return hasMusic && hasStart;
+}
+
+export function isMusicStartPhrase(text: string): boolean {
+  return looksLikeMusicStart(commandTextFromUtterance(text) || text);
+}
 
 export const PAUSE_PHRASES = [
   "пауза",
@@ -152,7 +192,7 @@ function firstMatchingPhrase(text: string, phrases: string[]): string | undefine
   let best: string | undefined;
   let bestLen = 0;
   for (const p of phrases) {
-    if (!phraseContained(text, p)) continue;
+    if (!isFocusedCommandUtterance(text, p)) continue;
     if (p.length > bestLen) {
       best = p;
       bestLen = p.length;
@@ -187,7 +227,7 @@ export const BUILTIN_SCENARIOS: Scenario[] = [
 
 export function isWeatherRequest(spoken: string): boolean {
   const text = commandTextFromUtterance(spoken);
-  return WEATHER_PHRASES.some((p) => phraseContained(text, p));
+  return WEATHER_PHRASES.some((p) => isFocusedCommandUtterance(text, p));
 }
 
 export async function fetchWeatherLine(): Promise<string> {
@@ -240,7 +280,7 @@ export function findBuiltinByPhrase(
       { id: "m3", type: "media_play_pause", value: "" },
     ]);
   }
-  if (firstMatchingPhrase(text, MUSIC_PHRASES)) {
+  if (looksLikeMusicStart(text)) {
     return builtin("play_music", "включи музыку", [
       {
         id: "music1",

@@ -4,9 +4,10 @@ export type AppSettings = {
   outputVolume: number;
   closeToTray: boolean;
   autostart: boolean;
-  
   musicAppPath: string;
   musicAppName: string;
+  wakeVoiceEnabled: boolean;
+  doneVoiceEnabled: boolean;
 };
 
 const STORAGE_KEY = "dubina.settings.v1";
@@ -19,6 +20,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autostart: false,
   musicAppPath: "",
   musicAppName: "",
+  wakeVoiceEnabled: true,
+  doneVoiceEnabled: true,
 };
 
 export function loadSettings(): AppSettings {
@@ -30,6 +33,8 @@ export function loadSettings(): AppSettings {
       ...DEFAULT_SETTINGS,
       ...parsed,
       outputVolume: clampVolume(parsed.outputVolume ?? DEFAULT_SETTINGS.outputVolume),
+      wakeVoiceEnabled: parsed.wakeVoiceEnabled ?? DEFAULT_SETTINGS.wakeVoiceEnabled,
+      doneVoiceEnabled: parsed.doneVoiceEnabled ?? DEFAULT_SETTINGS.doneVoiceEnabled,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

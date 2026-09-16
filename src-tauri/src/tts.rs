@@ -449,63 +449,265 @@ fn system_tts(text: &str, volume: f32) -> Result<(), String> {
 
 #[tauri::command]
 pub fn start_music_player(app_path: String) -> Result<(), String> {
-    let app_path = app_path.trim();
-    if app_path.is_empty() {
-        return Err(
-            "В настройках выбери программу для музыки (Яндекс Музыка, Spotify…)"
-                .into(),
-        );
+    let resolved = resolve_music_app_path(app_path.trim())?;
+    let name = music_app_display_name(&resolved);
+    let lower = name.to_lowercase();
+    let is_yandex = lower.contains("яндекс") || lower.contains("yandex");
+
+    #[cfg(target_os = "macos")]
+    {
+        if is_yandex {
+            return macos_play_yandex(&name, &resolved);
+        }
+        crate::open_app_inner(&resolved)?;
+        macos_force_playback(&name, &resolved);
+        return Ok(());
     }
 
-    crate::open_app_inner(app_path)?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        crate::open_app_inner(&resolved)?;
+        let path = resolved.clone();
+        let name = name.clone();
+        thread::spawn(move || {
+            let is_shell = path.starts_with("shell:") || path.contains('!');
+            if is_shell {
+                thread::sleep(Duration::from_millis(1800));
+            } else {
+                let ok = wait_until_running(&name, Duration::from_secs(5));
+                if !ok {
+                    thread::sleep(Duration::from_millis(1200));
+                } else {
+                    thread::sleep(Duration::from_millis(800));
+                }
+            }
 
-    let name = process_name_from_path(app_path);
-    let is_shell = app_path.starts_with("shell:") || app_path.contains('!');
-    if is_shell {
-        thread::sleep(Duration::from_millis(3500));
-    } else {
-        let ok = wait_until_running(&name, Duration::from_secs(20));
-        if !ok {
-            thread::sleep(Duration::from_millis(2800));
-        } else {
-            thread::sleep(Duration::from_millis(2200));
+            #[cfg(target_os = "windows")]
+            {
+                let stem = process_name_from_path(&path);
+                let _ = crate::windows_native::focus_exe(&stem);
+                thread::sleep(Duration::from_millis(700));
+                crate::windows_native::send_media_play_toggle();
+                thread::sleep(Duration::from_millis(500));
+                let _ = crate::windows_native::focus_exe(&stem);
+                thread::sleep(Duration::from_millis(250));
+                crate::windows_native::send_media_play();
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                if crate::media_key_inner("play_pause").is_err() {
+                    let _ = Command::new("playerctl").arg("play").status();
+                }
+            }
+        });
+        Ok(())
+    }
+}
+
+fn resolve_music_app_path(preferred: &str) -> Result<String, String> {
+    let preferred = preferred.trim();
+    if !preferred.is_empty() {
+        let path = Path::new(preferred);
+        if path.exists() || preferred.starts_with("shell:") || preferred.contains('!') {
+            return Ok(preferred.to_string());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(found) = crate::find_macos_app_fuzzy(preferred) {
+                return Ok(found.to_string_lossy().to_string());
+            }
         }
     }
 
     #[cfg(target_os = "macos")]
     {
-        let _ = Command::new("osascript")
-            .args([
-                "-e",
-                &format!("tell application \"{name}\" to activate"),
-            ])
-            .status();
-        thread::sleep(Duration::from_millis(400));
+        for candidate in [
+            "/Applications/Яндекс Музыка.app",
+            "/Applications/Yandex Music.app",
+            "/Applications/Spotify.app",
+            "/Applications/Music.app",
+            "/System/Applications/Music.app",
+        ] {
+            if Path::new(candidate).exists() {
+                return Ok(candidate.to_string());
+            }
+        }
+        for query in ["Яндекс Музыка", "Yandex Music", "Spotify", "Music"] {
+            if let Some(found) = crate::find_macos_app_fuzzy(query) {
+                return Ok(found.to_string_lossy().to_string());
+            }
+        }
     }
 
     #[cfg(target_os = "windows")]
     {
-        let _ = crate::windows_native::focus_exe(&name);
-        thread::sleep(Duration::from_millis(1500));
-        crate::windows_native::send_media_play_toggle();
-        thread::sleep(Duration::from_millis(1200));
-        let _ = crate::windows_native::focus_exe(&name);
-        thread::sleep(Duration::from_millis(400));
-        crate::windows_native::send_media_play();
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            candidates.push(local.join("Programs").join("YandexMusic").join("YandexMusic.exe"));
+            candidates.push(local.join("YandexMusic").join("YandexMusic.exe"));
+            candidates.push(
+                local
+                    .join("Microsoft")
+                    .join("WindowsApps")
+                    .join("YandexMusic.exe"),
+            );
+        }
+        if let Some(user) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+            candidates.push(
+                user.join("AppData")
+                    .join("Roaming")
+                    .join("Spotify")
+                    .join("Spotify.exe"),
+            );
+        }
+        if let Some(pf) = std::env::var_os("PROGRAMFILES").map(PathBuf::from) {
+            candidates.push(pf.join("Spotify").join("Spotify.exe"));
+        }
+        for c in candidates {
+            if c.exists() {
+                return Ok(c.to_string_lossy().to_string());
+            }
+        }
+        return Ok("Spotify".to_string());
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
     {
-        if crate::media_key_inner("play_pause").is_err() {
-            #[cfg(target_os = "macos")]
+        for bin in ["spotify", "yandex-music", "rhythmbox"] {
+            if Command::new("which")
+                .arg(bin)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
             {
-                let _ = Command::new("osascript")
-                    .args(["-e", "tell application \"System Events\" to keystroke space"])
-                    .status();
+                return Ok(bin.to_string());
             }
         }
     }
+
+    Err(
+        "Не нашёл музыкальный плеер. В настройках выбери Яндекс Музыку или Spotify."
+            .into(),
+    )
+}
+
+fn music_app_display_name(path_or_name: &str) -> String {
+    let path = Path::new(path_or_name);
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("app"))
+        .unwrap_or(false)
+    {
+        return path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path_or_name)
+            .to_string();
+    }
+    process_name_from_path(path_or_name)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_play_yandex(app_name: &str, app_path: &str) -> Result<(), String> {
+    let name = app_name.replace('"', "");
+    let open_target = if Path::new(app_path).exists() {
+        app_path.to_string()
+    } else {
+        name.clone()
+    };
+
+    thread::spawn(move || {
+        if let Err(e) = ensure_yandex_cdp_and_play(&name, &open_target) {
+            eprintln!("[dubina:yandex] {e}");
+        }
+    });
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_yandex_cdp_and_play(name: &str, open_target: &str) -> Result<(), String> {
+    use crate::yandex_cdp::{self, debugging_port};
+
+    if !yandex_cdp::cdp_ready() {
+        if is_process_running(name) {
+            let _ = Command::new("osascript")
+                .args(["-e", &format!("tell application \"{name}\" to quit")])
+                .status();
+            thread::sleep(Duration::from_millis(1200));
+            if is_process_running(name) {
+                let _ = Command::new("pkill").args(["-f", name]).status();
+                thread::sleep(Duration::from_millis(800));
+            }
+        }
+
+        let port = debugging_port().to_string();
+        let status = Command::new("open")
+            .args([
+                "-g",
+                "-a",
+                open_target,
+                "--args",
+                &format!("--remote-debugging-port={port}"),
+            ])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("Не удалось запустить Яндекс Музыку с debug-портом".into());
+        }
+        if !yandex_cdp::wait_cdp_ready(Duration::from_secs(20)) {
+            return Err(format!(
+                "Яндекс Музыка не открыла debug-порт {port}. Закрой её и скажи «включи музыку» ещё раз."
+            ));
+        }
+        thread::sleep(Duration::from_millis(2500));
+    }
+
+    let result = yandex_cdp::play_via_cdp()?;
+    eprintln!("[dubina:yandex] cdp play => {result}");
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_force_playback(app_name: &str, app_path: &str) {
+    let name = app_name.replace('"', "");
+    let lower = name.to_lowercase();
+    let is_spotify = lower.contains("spotify");
+    let is_apple_music = lower == "music"
+        || (lower.contains("music")
+            && !lower.contains("yandex")
+            && !lower.contains("яндекс")
+            && !is_spotify);
+
+    let already = is_process_running(&name);
+    if !already {
+        if Path::new(app_path).exists() {
+            let _ = Command::new("open").args(["-g", "-a", app_path]).status();
+        } else {
+            let _ = Command::new("open").args(["-g", "-a", &name]).status();
+        }
+        let _ = wait_until_running(&name, Duration::from_secs(8));
+        thread::sleep(Duration::from_millis(1200));
+    }
+
+    if is_spotify {
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Spotify\" to play"])
+            .status();
+        return;
+    }
+
+    if is_apple_music {
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Music\" to play"])
+            .status();
+        return;
+    }
+
+    let _ = crate::media_key_inner("play_pause");
 }
 
 fn process_name_from_path(path_or_name: &str) -> String {
@@ -530,7 +732,16 @@ fn wait_until_running(name: &str, timeout: Duration) -> bool {
 fn is_process_running(name: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
-        
+        if Command::new("pgrep")
+            .args(["-if", name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
         let script = format!(
             "tell application \"System Events\" to (name of processes) contains \"{}\"",
             name.replace('"', "")
@@ -541,13 +752,7 @@ fn is_process_running(name: &str) -> bool {
                 return true;
             }
         }
-        Command::new("pgrep")
-            .args(["-if", name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        false
     }
 
     #[cfg(target_os = "windows")]

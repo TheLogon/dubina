@@ -6,5 +6,5 @@ alwaysApply: true
 # Git commits and releases
 
 - Commit messages must be in English only. Never write commit subjects or bodies in Russian.
-- GitHub release body must be exactly: `Сборки Linux, MacOS и Windows.`
+- GitHub release body must be exactly: `Сборки MacOS и Windows.`
 - Do not add updater notes, changelogs, or any extra text to the release description.

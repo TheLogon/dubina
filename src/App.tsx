@@ -14,7 +14,7 @@ import {
   normalizePhrase,
   upsertScenario,
 } from "./store/scenarios";
-import { findBuiltinByPhrase, fetchWeatherLine, isWeatherRequest } from "./commands/builtins";
+import { findBuiltinByPhrase, fetchWeatherLine, isMusicStartPhrase, isWeatherRequest } from "./commands/builtins";
 import { findChatterReply } from "./commands/chatter";
 import {
   isDictationStop,
@@ -37,7 +37,7 @@ import {
   startVoiceController,
   type VoiceController,
 } from "./voice/engine";
-import { commandTextFromUtterance, isLikelyTtsEcho } from "./voice/matchCommand";
+import { commandTextFromUtterance, isIncompleteCommandFragment, isLikelyTtsEcho, isStopPhrase, mergeCommandFragments, significantTokens } from "./voice/matchCommand";
 import "./styles/global.css";
 
 function App() {
@@ -61,7 +61,10 @@ function App() {
   const voiceRef = useRef<VoiceController | null>(null);
   const busyRef = useRef(false);
   const wakeLatchRef = useRef(false);
+  const runCancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
   const lastChatterRef = useRef<{ at: number; phrase: string } | null>(null);
+  const pendingCmdRef = useRef<{ text: string; at: number } | null>(null);
+  const pendingCmdTimerRef = useRef<number | null>(null);
   const handleFinalRef = useRef<(text: string) => void>(() => {});
   const handlePartialRef = useRef<(text: string) => void>(() => {});
 
@@ -118,26 +121,69 @@ function App() {
     }
   }
 
+  function clearPendingCommand() {
+    pendingCmdRef.current = null;
+    if (pendingCmdTimerRef.current !== null) {
+      window.clearTimeout(pendingCmdTimerRef.current);
+      pendingCmdTimerRef.current = null;
+    }
+  }
+
   function enterCommandMode() {
     modeRef.current = "command";
     wakeLatchRef.current = false;
     setListener("listening");
-    setStatus("Слушаю… можно без «Дубина»");
+    setStatus("Слушаю");
+    bumpListenTimeout();
+  }
+
+  function bumpListenTimeout() {
     clearCommandTimer();
+    if (modeRef.current !== "command") return;
     commandTimerRef.current = window.setTimeout(() => {
       if (modeRef.current !== "command") return;
       exitListenMode();
-    }, 25000);
+    }, 8000);
   }
 
   function exitListenMode() {
     clearCommandTimer();
+    clearPendingCommand();
     modeRef.current = "idle";
     wakeLatchRef.current = false;
     setListener("idle");
     setStatus(null);
     setCaption("");
     setCaptionFinal("");
+  }
+
+  function isGlobalStop(spoken: string): boolean {
+    return isStopPhrase(spoken);
+  }
+
+  function handleGlobalStop(): boolean {
+    if (modeRef.current === "dictation") {
+      stopDictation();
+      return true;
+    }
+    if (busyRef.current || listenerRef.current === "running") {
+      runCancelRef.current.cancelled = true;
+      busyRef.current = false;
+      exitListenMode();
+      setStatus("Стоп");
+      return true;
+    }
+    if (
+      modeRef.current === "command" ||
+      listenerRef.current === "listening" ||
+      listenerRef.current === "wake" ||
+      listenerRef.current === "error"
+    ) {
+      exitListenMode();
+      setStatus("Стоп");
+      return true;
+    }
+    return false;
   }
 
   function failUnknown() {
@@ -156,7 +202,7 @@ function App() {
     playActionSafe("wake");
     window.setTimeout(() => {
       voiceRef.current?.keepAlive();
-    }, 700);
+    }, 400);
   }
 
   function toggleFromOrb() {
@@ -259,7 +305,7 @@ function App() {
     setStatus("Готово");
     setCaption("");
     setCaptionFinal("");
-    speakSafe("Готово");
+    playActionSafe("ok");
   }
 
   async function typeDictated(raw: string) {
@@ -319,17 +365,34 @@ function App() {
     clearCommandTimer();
     modeRef.current = "idle";
     wakeLatchRef.current = false;
+    runCancelRef.current = { cancelled: false };
+    const signal = runCancelRef.current;
     setCaption("");
     setCaptionFinal("");
     setListener("running");
     setStatus(`«${scenario.phrase}»`);
     try {
-      await runScenario(scenario, ({ index, total }) => {
-        setStatus(`Шаг ${index + 1}/${total}`);
-      });
+      await runScenario(
+        scenario,
+        ({ index, total }) => {
+          if (signal.cancelled) return;
+          setStatus(`Шаг ${index + 1}/${total}`);
+        },
+        signal,
+      );
+      if (signal.cancelled) {
+        setStatus("Стоп");
+        setListener("idle");
+        return;
+      }
       setStatus("Готово");
       enterCommandMode();
     } catch (e) {
+      if (signal.cancelled) {
+        setStatus("Стоп");
+        setListener("idle");
+        return;
+      }
       playActionSafe("error");
       setListener("error");
       setStatus(e instanceof Error ? e.message : "Ошибка");
@@ -345,29 +408,83 @@ function App() {
 
   const handleFinalUtterance = useCallback(
     async (text: string) => {
-      if (busyRef.current) return;
-      if (isSpeechMuted() || isLikelyTtsEcho(text)) return;
-      console.info("[dubina:stt]", text);
+      if (busyRef.current && !isGlobalStop(text)) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (isGlobalStop(trimmed) && handleGlobalStop()) return;
+
+      const { woke: wakeHint } = extractWakeAndCommand(trimmed);
+      const listeningNow =
+        modeRef.current === "command" || modeRef.current === "dictation";
+      if (isSpeechMuted() && !wakeHint && !listeningNow) return;
+      if (isLikelyTtsEcho(trimmed) && !wakeHint) return;
+      console.info("[dubina:stt]", trimmed);
 
       if (modeRef.current === "dictation") {
-        await typeDictated(text);
+        await typeDictated(trimmed);
         return;
       }
 
       if (modeRef.current === "command") {
-        setCaptionFinal(text);
+        bumpListenTimeout();
+        setCaptionFinal(trimmed);
         setCaption("");
         wakeLatchRef.current = false;
-        const phrase = commandTextFromUtterance(text);
+
+        const { woke: onlyWake } = extractWakeAndCommand(trimmed);
+        const stripped = commandTextFromUtterance(trimmed);
+        if (onlyWake && !stripped) {
+          return;
+        }
+
+        let phrase = stripped;
+        const pending = pendingCmdRef.current;
+        if (pending && Date.now() - pending.at < 2500) {
+          phrase = mergeCommandFragments(pending.text, phrase || trimmed);
+          clearPendingCommand();
+        }
+
         if (!phrase || isLikelyTtsEcho(phrase)) {
           return;
         }
-        const ok = await resolveSpoken(text);
-        if (!ok) failUnknown();
+
+        if (
+          findBuiltinByPhrase(phrase, settingsRef.current) ||
+          findScenarioByPhrase(scenariosRef.current, phrase) ||
+          isMusicStartPhrase(phrase) ||
+          isWeatherRequest(phrase) ||
+          matchDictationStart(phrase)
+        ) {
+          clearPendingCommand();
+          const ok = await resolveSpoken(phrase);
+          if (!ok) failUnknown();
+          return;
+        }
+
+        if (isIncompleteCommandFragment(phrase)) {
+          pendingCmdRef.current = { text: phrase, at: Date.now() };
+          if (pendingCmdTimerRef.current !== null) {
+            window.clearTimeout(pendingCmdTimerRef.current);
+          }
+          pendingCmdTimerRef.current = window.setTimeout(() => {
+            pendingCmdRef.current = null;
+            pendingCmdTimerRef.current = null;
+          }, 2200);
+          setCaptionFinal(phrase);
+          return;
+        }
+
+        clearPendingCommand();
+        const ok = await resolveSpoken(phrase);
+        if (!ok) {
+          const toks = significantTokens(phrase);
+          if (toks.length <= 1 && phrase.length < 8) return;
+          failUnknown();
+        }
         return;
       }
 
-      const { woke, command } = extractWakeAndCommand(text);
+      const { woke, command } = extractWakeAndCommand(trimmed);
       if (!woke) {
         wakeLatchRef.current = false;
         return;
@@ -375,23 +492,22 @@ function App() {
 
       setCaption("");
       setCaptionFinal(command || "Дубина");
+      void revealWindow();
+      setView("home");
 
       if (command) {
         if (!wakeLatchRef.current) {
-          void revealWindow();
-          setView("home");
           wakeAck();
           setStatus("Слушаю");
         }
         wakeLatchRef.current = false;
-        const ok = await resolveSpoken(text);
+        enterCommandMode();
+        const ok = await resolveSpoken(trimmed);
         if (!ok) failUnknown();
         return;
       }
 
       if (!wakeLatchRef.current) {
-        void revealWindow();
-        setView("home");
         wakeAck();
         setStatus("Слушаю");
       }
@@ -403,39 +519,48 @@ function App() {
 
   const handlePartialUtterance = useCallback(
     (text: string) => {
-      if (busyRef.current) return;
-      if (isSpeechMuted()) return;
+      if (busyRef.current && !isGlobalStop(text)) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (isGlobalStop(trimmed) && handleGlobalStop()) return;
+
+      const { woke: wakeHint } = extractWakeAndCommand(trimmed);
+      const listeningNow =
+        modeRef.current === "command" || modeRef.current === "dictation";
+      if (isSpeechMuted() && !wakeHint && !listeningNow) return;
 
       if (modeRef.current === "dictation") {
-        setCaption(text);
+        setCaption(trimmed);
         return;
       }
 
       if (modeRef.current === "command") {
-        setCaption(text);
+        bumpListenTimeout();
+        setCaption(trimmed);
         return;
       }
 
       if (modeRef.current !== "idle" || wakeLatchRef.current) return;
 
-      const { woke, command } = extractWakeAndCommand(text);
+      const { woke, command } = extractWakeAndCommand(trimmed);
       if (!woke) return;
 
       wakeLatchRef.current = true;
+      void revealWindow();
       setView("home");
       setCaption("");
       setCaptionFinal(command || "Дубина");
+      wakeAck();
+      setStatus("Слушаю");
+      enterCommandMode();
 
       if (command) {
-        const phrase = commandTextFromUtterance(text);
+        const phrase = commandTextFromUtterance(trimmed);
         if (phrase && matchDictationStart(phrase)) {
           void startDictation(matchDictationStart(phrase)!.remainder);
           return;
         }
         if (phrase && isWeatherRequest(phrase)) {
-          void revealWindow();
-          wakeAck();
-          setStatus("Слушаю");
           void handleWeather();
           return;
         }
@@ -444,20 +569,11 @@ function App() {
             findScenarioByPhrase(scenariosRef.current, phrase)
           : undefined;
         if (match) {
-          void revealWindow();
-          wakeAck();
-          setStatus("Слушаю");
           void executeScenario(match);
           return;
         }
-        void revealWindow();
         if (phrase && replyChatter(phrase)) return;
       }
-
-      void revealWindow();
-      wakeAck();
-      setStatus("Слушаю");
-      enterCommandMode();
     },
     [executeScenario],
   );
@@ -524,14 +640,14 @@ function App() {
   
   useEffect(() => {
     let cancelled = false;
+    let controller: VoiceController | null = null;
 
-    void (async () => {
-      try {
-        setMicBlocked(false);
-        setVoiceStatus("Запрос доступа к микрофону…");
-        const controller = await startVoiceController(
-          settings.inputDeviceId,
-          {
+    const boot = window.setTimeout(() => {
+      void (async () => {
+        try {
+          setMicBlocked(false);
+          setVoiceStatus("Запрос доступа к микрофону…");
+          const next = await startVoiceController(settings.inputDeviceId, {
             onPartial: (t) => {
               if (!cancelled) handlePartialRef.current(t);
             },
@@ -547,31 +663,54 @@ function App() {
             onStatus: (m) => {
               if (!cancelled) setVoiceStatus(m);
             },
-          },
-        );
-        if (cancelled) {
-          controller.stop();
-          return;
+          });
+          if (cancelled) {
+            next.stop();
+            return;
+          }
+          controller = next;
+          setMicBlocked(false);
+          voiceRef.current = next;
+          next.keepAlive();
+        } catch (e) {
+          if (!cancelled) {
+            const msg = e instanceof Error ? e.message : "Ошибка голоса";
+            setVoiceStatus(msg);
+            setMicBlocked(e instanceof MicPermissionError);
+            console.error("[dubina:voice]", e);
+          }
         }
-        setMicBlocked(false);
-        voiceRef.current = controller;
-        controller.keepAlive();
-      } catch (e) {
-        if (!cancelled) {
-          const msg = e instanceof Error ? e.message : "Ошибка голоса";
-          setVoiceStatus(msg);
-          setMicBlocked(e instanceof MicPermissionError);
-          console.error("[dubina:voice]", e);
-        }
-      }
-    })();
+      })();
+    }, 120);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(boot);
+      controller?.stop();
       voiceRef.current?.stop();
       voiceRef.current = null;
     };
   }, [settings.inputDeviceId, voiceEpoch]);
+
+  useEffect(() => {
+    const w = window as unknown as {
+      __dubina?: {
+        playMusic: () => Promise<unknown>;
+        match: (phrase: string) => string | null;
+      };
+    };
+    w.__dubina = {
+      playMusic: () =>
+        invoke("start_music_player", {
+          appPath: settingsRef.current.musicAppPath || "",
+        }),
+      match: (phrase: string) =>
+        findBuiltinByPhrase(phrase, settingsRef.current)?.phrase ?? null,
+    };
+    return () => {
+      delete w.__dubina;
+    };
+  }, []);
 
   function openCreate() {
     setDraft(createEmptyScenario());
