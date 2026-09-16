@@ -283,7 +283,7 @@ fn shell_execute(path: &Path) -> Result<(), String> {
     let dir = path.parent().map(wide);
     let rc = unsafe {
         ShellExecuteW(
-            HWND::default(),
+            None,
             w!("open"),
             PCWSTR(file.as_ptr()),
             PCWSTR::null(),
